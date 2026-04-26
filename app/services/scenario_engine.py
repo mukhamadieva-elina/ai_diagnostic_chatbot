@@ -279,8 +279,13 @@ async def _generate_and_finalize(
         scenario = await db.get(Scenario, session.scenario_id)
         dialog_context = f"Сценарий диагностики: {scenario.name}\n\n{dialog_text}"
 
-        # Генерируем текст отчёта
-        llm_response = await llm.generate_report(dialog_context)
+        # Генерируем текст отчёта.
+        # Если файл промта загружен в GigaChat — используем его, иначе текстовый промт.
+        llm_response = await llm.generate_report(
+            dialog_text=dialog_context,
+            system_prompt=scenario.system_prompt or None,
+            prompt_file_id=scenario.gigachat_file_id or None,
+        )
 
         # Генерируем PDF
         dialog_for_pdf = [

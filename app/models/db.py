@@ -22,6 +22,9 @@ class Scenario(Base):
     name: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    system_prompt: Mapped[str | None] = mapped_column(Text)
+    # ID файла промта в хранилище GigaChat (заполняется автоматически при сохранении через админку)
+    gigachat_file_id: Mapped[str | None] = mapped_column(String(200))
 
     steps: Mapped[list["ScenarioStep"]] = relationship(
         back_populates="scenario",
