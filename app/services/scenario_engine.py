@@ -1,0 +1,353 @@
+"""
+Движок сценария: ведёт сессию по шагам и формирует ответы бота.
+Вся логика состояний живёт здесь — эндпоинты только передают данные.
+"""
+import logging
+import uuid
+from dataclasses import dataclass
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from models.db import ChatSession, DialogEntry, Scenario, ScenarioStep, Report
+from services import llm, pdf_generator, bitrix
+
+logger = logging.getLogger(__name__)
+
+GREETING = (
+    "Здравствуйте! Я AI-диагност от AI Booster. "
+    "Я помогу вам структурировать ключевую бизнес-проблему и предложу первые шаги для её решения. "
+    "Выберите проблему из ниже перечисленного списка:"
+)
+
+_CONTACT_PROMPTS = {
+    "name": "Пожалуйста, укажите ваше имя:",
+    "email": "Укажите ваш email:",
+    "phone": "Укажите ваш номер телефона:",
+}
+_CONTACT_SEQUENCE = ["name", "email", "phone"]
+
+
+@dataclass
+class BotReply:
+    message: str
+    status: str           # question | collecting_contacts | generating | completed
+    report_url: str | None = None
+
+
+async def start_session(db: AsyncSession) -> tuple[uuid.UUID, str, list[dict]]:
+    """Создаёт новую сессию и возвращает (session_id, greeting, scenarios_list)."""
+    session = ChatSession(status="pending_scenario")
+    db.add(session)
+    # flush чтобы получить UUID до создания дочерних записей
+    await db.flush()
+
+    scenarios_result = await db.execute(
+        select(Scenario).where(Scenario.is_active == True).order_by(Scenario.id)
+    )
+    scenarios = scenarios_result.scalars().all()
+    scenarios_list = [{"id": s.id, "name": s.name} for s in scenarios]
+
+    options_text = "\n".join(f"{i + 1}. {s.name}" for i, s in enumerate(scenarios))
+    full_greeting = f"{GREETING}\n\n{options_text}"
+
+    db.add(DialogEntry(
+        session_id=session.id,
+        step_index=None,
+        bot_message=full_greeting,
+        user_answer=None,
+    ))
+    await db.commit()
+    return session.id, full_greeting, scenarios_list
+
+
+async def handle_reply(
+    session_id: uuid.UUID,
+    user_message: str,
+    db: AsyncSession,
+    base_url: str,
+) -> BotReply:
+    """Главный обработчик ответа пользователя. Возвращает следующее сообщение бота."""
+    session = await db.get(ChatSession, session_id, options=[selectinload(ChatSession.entries)])
+    if session is None:
+        return BotReply(message="Сессия не найдена. Начните новый диалог.", status="error")
+
+    if session.status == "completed":
+        report_url = f"{base_url}/api/v1/report/{session_id}" if session.report else None
+        return BotReply(
+            message="Ваш отчёт уже готов.",
+            status="completed",
+            report_url=report_url,
+        )
+
+    if session.status == "pending_scenario":
+        return await _handle_scenario_selection(session, user_message, db)
+
+    if session.status == "in_progress":
+        return await _handle_step_answer(session, user_message, db, base_url)
+
+    if session.status == "pending_contact":
+        return await _handle_contact_collection(session, user_message, db, base_url)
+
+    return BotReply(message="Неизвестный статус сессии.", status="error")
+
+
+async def get_session_state(
+    session_id: uuid.UUID,
+    db: AsyncSession,
+    base_url: str,
+) -> dict | None:
+    session = await db.get(ChatSession, session_id, options=[selectinload(ChatSession.scenario)])
+    if not session:
+        return None
+
+    report_url = None
+    if session.status == "completed" and session.report:
+        report_url = f"{base_url}/api/v1/report/{session_id}"
+
+    return {
+        "session_id": session.id,
+        "status": session.status,
+        "scenario_name": session.scenario.name if session.scenario else None,
+        "report_url": report_url,
+    }
+
+
+# --- Внутренние обработчики ---
+
+async def _handle_scenario_selection(
+    session: ChatSession,
+    user_message: str,
+    db: AsyncSession,
+) -> BotReply:
+    scenarios_result = await db.execute(
+        select(Scenario)
+        .where(Scenario.is_active == True)
+        .options(selectinload(Scenario.steps))
+    )
+    scenarios = scenarios_result.scalars().all()
+
+    # Поддерживаем выбор по номеру или по названию
+    chosen: Scenario | None = None
+    stripped = user_message.strip()
+    if stripped.isdigit():
+        idx = int(stripped) - 1
+        if 0 <= idx < len(scenarios):
+            chosen = scenarios[idx]
+    else:
+        for s in scenarios:
+            if s.name.lower() == stripped.lower():
+                chosen = s
+                break
+
+    if not chosen:
+        options_text = "\n".join(f"{i + 1}. {s.name}" for i, s in enumerate(scenarios))
+        return BotReply(
+            message=f"Пожалуйста, выберите номер или название из списка:\n\n{options_text}",
+            status="question",
+        )
+
+    if not chosen.steps:
+        return BotReply(
+            message="Для этого сценария ещё не настроены вопросы. Выберите другой.",
+            status="question",
+        )
+
+    # Фиксируем выбор пользователя и переходим к первому шагу
+    _update_last_entry_answer(session, user_message)
+
+    session.scenario_id = chosen.id
+    session.current_step_index = 1
+    session.status = "in_progress"
+
+    first_step = chosen.steps[0]
+    db.add(DialogEntry(
+        session_id=session.id,
+        step_index=1,
+        bot_message=first_step.message_text,
+        user_answer=None,
+    ))
+    await db.commit()
+    return BotReply(message=first_step.message_text, status="question")
+
+
+async def _handle_step_answer(
+    session: ChatSession,
+    user_message: str,
+    db: AsyncSession,
+    base_url: str,
+) -> BotReply:
+    # Фиксируем ответ на текущий шаг
+    _update_last_entry_answer(session, user_message)
+
+    steps_result = await db.execute(
+        select(ScenarioStep)
+        .where(ScenarioStep.scenario_id == session.scenario_id)
+        .order_by(ScenarioStep.order_index)
+    )
+    steps = steps_result.scalars().all()
+    total_steps = len(steps)
+    current_index = session.current_step_index  # 1-based
+
+    if current_index < total_steps:
+        next_step = steps[current_index]  # current_index как 0-based указывает на следующий
+        session.current_step_index = current_index + 1
+        db.add(DialogEntry(
+            session_id=session.id,
+            step_index=current_index + 1,
+            bot_message=next_step.message_text,
+            user_answer=None,
+        ))
+        await db.commit()
+        return BotReply(message=next_step.message_text, status="question")
+
+    # Все шаги пройдены — переходим к сбору контактов
+    session.status = "pending_contact"
+    session.pending_contact_field = "name"
+    contact_prompt = _CONTACT_PROMPTS["name"]
+    db.add(DialogEntry(
+        session_id=session.id,
+        step_index=None,
+        bot_message=contact_prompt,
+        user_answer=None,
+    ))
+    await db.commit()
+    return BotReply(message=contact_prompt, status="collecting_contacts")
+
+
+async def _handle_contact_collection(
+    session: ChatSession,
+    user_message: str,
+    db: AsyncSession,
+    base_url: str,
+) -> BotReply:
+    field = session.pending_contact_field
+    _update_last_entry_answer(session, user_message)
+
+    if field == "name":
+        session.contact_name = user_message.strip()
+        session.pending_contact_field = "email"
+        prompt = _CONTACT_PROMPTS["email"]
+    elif field == "email":
+        session.contact_email = user_message.strip()
+        session.pending_contact_field = "phone"
+        prompt = _CONTACT_PROMPTS["phone"]
+    elif field == "phone":
+        session.contact_phone = user_message.strip()
+        session.pending_contact_field = None
+        # Все контакты собраны — генерируем отчёт
+        await db.commit()
+        return await _generate_and_finalize(session, db, base_url)
+    else:
+        prompt = _CONTACT_PROMPTS.get("name", "Укажите ваше имя:")
+
+    db.add(DialogEntry(
+        session_id=session.id,
+        step_index=None,
+        bot_message=prompt,
+        user_answer=None,
+    ))
+    await db.commit()
+    return BotReply(message=prompt, status="collecting_contacts")
+
+
+async def _generate_and_finalize(
+    session: ChatSession,
+    db: AsyncSession,
+    base_url: str,
+) -> BotReply:
+    session.status = "generating"
+    await db.commit()
+
+    try:
+        # Формируем текст диалога для LLM
+        entries_result = await db.execute(
+            select(DialogEntry)
+            .where(
+                DialogEntry.session_id == session.id,
+                DialogEntry.step_index.is_not(None),
+            )
+            .order_by(DialogEntry.step_index)
+        )
+        entries = entries_result.scalars().all()
+
+        dialog_text = "\n".join(
+            f"Вопрос: {e.bot_message}\nОтвет: {e.user_answer or '—'}"
+            for e in entries
+        )
+        scenario = await db.get(Scenario, session.scenario_id)
+        dialog_context = f"Сценарий диагностики: {scenario.name}\n\n{dialog_text}"
+
+        # Генерируем текст отчёта
+        llm_response = await llm.generate_report(dialog_context)
+
+        # Генерируем PDF
+        dialog_for_pdf = [
+            {"question": e.bot_message, "answer": e.user_answer or "—"}
+            for e in entries
+        ]
+        pdf_path = pdf_generator.generate_pdf(
+            session_id=session.id,
+            scenario_name=scenario.name,
+            contact_name=session.contact_name or "",
+            contact_email=session.contact_email or "",
+            contact_phone=session.contact_phone or "",
+            dialog_entries=dialog_for_pdf,
+            llm_response=llm_response,
+        )
+
+        # Сохраняем отчёт в БД
+        report = Report(
+            session_id=session.id,
+            pdf_path=pdf_path,
+            llm_response=llm_response,
+        )
+        db.add(report)
+        session.status = "completed"
+        await db.commit()
+        await db.refresh(report)
+
+        # Отправляем в Bitrix24 (в фоне — ошибки не блокируют ответ)
+        try:
+            deal_id = await bitrix.push_deal(
+                contact_name=session.contact_name or "",
+                contact_email=session.contact_email or "",
+                contact_phone=session.contact_phone or "",
+                scenario_name=scenario.name,
+                pdf_path=pdf_path,
+                session_id=str(session.id),
+            )
+            if deal_id:
+                report.bitrix_deal_id = deal_id
+                report.sent_to_bitrix = True
+                await db.commit()
+        except Exception as e:
+            logger.warning("Bitrix24 push failed: %s", e)
+
+        report_url = f"{base_url}/api/v1/report/{session.id}"
+        return BotReply(
+            message=(
+                "Отчёт готов! Вы можете скачать его по ссылке ниже. "
+                "Спасибо за прохождение диагностики!"
+            ),
+            status="completed",
+            report_url=report_url,
+        )
+
+    except Exception as e:
+        logger.error("Ошибка генерации отчёта для сессии %s: %s", session.id, e)
+        session.status = "in_progress"  # откатываем статус чтобы повторить
+        await db.commit()
+        return BotReply(
+            message="Произошла ошибка при генерации отчёта. Попробуйте ещё раз.",
+            status="error",
+        )
+
+
+def _update_last_entry_answer(session: ChatSession, answer: str) -> None:
+    """Ставит ответ пользователя в последнюю запись диалога без ответа."""
+    for entry in reversed(session.entries):
+        if entry.user_answer is None:
+            entry.user_answer = answer
+            return
