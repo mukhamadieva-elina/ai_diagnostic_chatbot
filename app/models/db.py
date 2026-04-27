@@ -121,3 +121,53 @@ class Report(Base):
     bitrix_deal_id: Mapped[str | None] = mapped_column(String(100))
 
     session: Mapped["ChatSession"] = relationship(back_populates="report")
+
+
+_DEFAULT_CLASSIFICATION_PROMPT = (
+    "Определи тип ответа пользователя. Ответь ТОЛЬКО одним словом: TYPE1, TYPE2 или TYPE3.\n\n"
+    "ТИП 1 — НЕОСМЫСЛЕННЫЙ: случайные символы/буквы, ответ совершенно не относится к вопросу, "
+    "намеренное уклонение (например: «пропустить», «не хочу отвечать», «неважно»).\n"
+    "ТИП 2 — НИЗКИЙ УРОВЕНЬ: пользователь не владеет темой вопроса. "
+    "Признак — ответ очень короткий и лишён содержания. "
+    "Примеры таких ответов (не исчерпывающий список): «не знаю», «сложно сказать», "
+    "«всё плохо», «нормально», «никак», «не думали об этом».\n"
+    "ТИП 3 — ОСМЫСЛЕННЫЙ: пользователь описывает реальную ситуацию в компании, "
+    "ответ по смыслу относится к вопросу. Даже короткий, но содержательный ответ "
+    "относится к этому типу (например: «CRM не используем», «всё в Excel», "
+    "«менеджеры работают по-своему»).\n\n"
+    "Вопрос: {question}\n"
+    "Ответ: {answer}"
+)
+
+_DEFAULT_TYPE1_MESSAGE = (
+    "Я не смог понять ваш ответ. Пожалуйста, ответьте на вопрос подробнее — "
+    "это поможет сделать диагностику точной и полезной для вас.\n\n"
+    "{question}"
+)
+
+
+class ValidationSettings(Base):
+    """Настройки валидации ответов пользователя (синглтон, id=1)."""
+    __tablename__ = "validation_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    # Главный включатель валидации
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # ТИП 1 — неосмысленный ответ: повторяем вопрос
+    type1_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    type1_message: Mapped[str] = mapped_column(Text, nullable=False, default=_DEFAULT_TYPE1_MESSAGE)
+
+    # ТИП 2 — низкий уровень: отмечаем ответ в диалоге для LLM
+    type2_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    type2_answer_tag: Mapped[str] = mapped_column(
+        String(200), nullable=False,
+        default="[Уровень ответа: низкий — пользователь не владеет темой]",
+    )
+
+    # Промт для классификации (с плейсхолдерами {question} и {answer})
+    classification_prompt: Mapped[str] = mapped_column(Text, nullable=False, default=_DEFAULT_CLASSIFICATION_PROMPT)
+
+    def __str__(self) -> str:
+        return "Настройки валидации"

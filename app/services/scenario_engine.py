@@ -6,11 +6,13 @@ import logging
 import uuid
 from dataclasses import dataclass
 
+from fastapi import BackgroundTasks
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from models.db import ChatSession, DialogEntry, Scenario, ScenarioStep, Report
+from db.connection import async_session_factory
+from models.db import ChatSession, DialogEntry, Scenario, ScenarioStep, Report, ValidationSettings
 from services import llm, pdf_generator, bitrix
 
 logger = logging.getLogger(__name__)
@@ -67,9 +69,14 @@ async def handle_reply(
     user_message: str,
     db: AsyncSession,
     base_url: str,
+    background_tasks: BackgroundTasks | None = None,
 ) -> BotReply:
     """Главный обработчик ответа пользователя. Возвращает следующее сообщение бота."""
-    session = await db.get(ChatSession, session_id, options=[selectinload(ChatSession.entries)])
+    session = await db.get(
+        ChatSession,
+        session_id,
+        options=[selectinload(ChatSession.entries), selectinload(ChatSession.report)],
+    )
     if session is None:
         return BotReply(message="Сессия не найдена. Начните новый диалог.", status="error")
 
@@ -81,6 +88,12 @@ async def handle_reply(
             report_url=report_url,
         )
 
+    if session.status == "generating":
+        return BotReply(
+            message="Идёт генерация ИИ отчёта, пожалуйста подождите...",
+            status="generating",
+        )
+
     if session.status == "pending_scenario":
         return await _handle_scenario_selection(session, user_message, db)
 
@@ -88,7 +101,7 @@ async def handle_reply(
         return await _handle_step_answer(session, user_message, db, base_url)
 
     if session.status == "pending_contact":
-        return await _handle_contact_collection(session, user_message, db, base_url)
+        return await _handle_contact_collection(session, user_message, db, base_url, background_tasks)
 
     return BotReply(message="Неизвестный статус сессии.", status="error")
 
@@ -98,7 +111,11 @@ async def get_session_state(
     db: AsyncSession,
     base_url: str,
 ) -> dict | None:
-    session = await db.get(ChatSession, session_id, options=[selectinload(ChatSession.scenario)])
+    session = await db.get(
+        ChatSession,
+        session_id,
+        options=[selectinload(ChatSession.scenario), selectinload(ChatSession.report)],
+    )
     if not session:
         return None
 
@@ -178,6 +195,22 @@ async def _handle_step_answer(
     db: AsyncSession,
     base_url: str,
 ) -> BotReply:
+    # Валидация ответа через GigaChat (настройки из БД)
+    vs = await _get_validation_settings(db)
+    if vs and vs.enabled:
+        current_question = _get_current_question(session)
+        if current_question:
+            answer_type = await llm.validate_answer(
+                current_question, user_message, vs.classification_prompt
+            )
+            if answer_type == "TYPE1" and vs.type1_enabled:
+                return BotReply(
+                    message=vs.type1_message.replace("{question}", current_question),
+                    status="question",
+                )
+            if answer_type == "TYPE2" and vs.type2_enabled:
+                user_message = f"{user_message}\n{vs.type2_answer_tag}"
+
     # Фиксируем ответ на текущий шаг
     _update_last_entry_answer(session, user_message)
 
@@ -221,6 +254,7 @@ async def _handle_contact_collection(
     user_message: str,
     db: AsyncSession,
     base_url: str,
+    background_tasks: BackgroundTasks | None = None,
 ) -> BotReply:
     field = session.pending_contact_field
     _update_last_entry_answer(session, user_message)
@@ -236,9 +270,17 @@ async def _handle_contact_collection(
     elif field == "phone":
         session.contact_phone = user_message.strip()
         session.pending_contact_field = None
-        # Все контакты собраны — генерируем отчёт
+        session.status = "generating"
         await db.commit()
-        return await _generate_and_finalize(session, db, base_url)
+
+        generating_message = "Идёт генерация ИИ отчёта, это займёт около минуты..."
+        if background_tasks is not None:
+            # Запускаем генерацию в фоне и сразу возвращаем сообщение
+            background_tasks.add_task(_run_generation_bg, session.id, base_url)
+            return BotReply(message=generating_message, status="generating")
+        else:
+            # Fallback: генерация в том же запросе (если BackgroundTasks не передан)
+            return await _generate_and_finalize(session, db, base_url)
     else:
         prompt = _CONTACT_PROMPTS.get("name", "Укажите ваше имя:")
 
@@ -356,3 +398,26 @@ def _update_last_entry_answer(session: ChatSession, answer: str) -> None:
         if entry.user_answer is None:
             entry.user_answer = answer
             return
+
+
+async def _get_validation_settings(db: AsyncSession) -> ValidationSettings | None:
+    """Возвращает единственную строку настроек валидации (id=1)."""
+    return await db.get(ValidationSettings, 1)
+
+
+def _get_current_question(session: ChatSession) -> str | None:
+    """Возвращает текст вопроса, на который пользователь сейчас отвечает."""
+    for entry in reversed(session.entries):
+        if entry.step_index is not None and entry.user_answer is None:
+            return entry.bot_message
+    return None
+
+
+async def _run_generation_bg(session_id: uuid.UUID, base_url: str) -> None:
+    """Фоновая задача: генерирует отчёт в отдельной DB-сессии после отправки ответа клиенту."""
+    async with async_session_factory() as db:
+        session = await db.get(ChatSession, session_id)
+        if session is None:
+            logger.error("Фоновая генерация: сессия %s не найдена", session_id)
+            return
+        await _generate_and_finalize(session, db, base_url)

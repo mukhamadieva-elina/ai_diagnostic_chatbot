@@ -3,7 +3,7 @@ import logging
 from sqladmin import ModelView
 from starlette.requests import Request
 
-from models.db import Scenario, ScenarioStep, ChatSession, Report
+from models.db import Scenario, ScenarioStep, ChatSession, Report, ValidationSettings
 from services import llm
 
 logger = logging.getLogger(__name__)
@@ -101,6 +101,87 @@ class ChatSessionAdmin(ModelView, model=ChatSession):
     column_sortable_list = [ChatSession.created_at, ChatSession.status]
     can_create = False
     can_edit = False
+
+
+class ValidationSettingsAdmin(ModelView, model=ValidationSettings):
+    name = "Настройки валидации"
+    name_plural = "Настройки валидации ответов"
+    icon = "fa-solid fa-sliders"
+
+    column_list = [
+        ValidationSettings.enabled,
+        ValidationSettings.type1_enabled,
+        ValidationSettings.type2_enabled,
+    ]
+    column_labels = {
+        ValidationSettings.enabled: "Валидация включена",
+        ValidationSettings.type1_enabled: "Неосмысленный ответ — повторять вопрос",
+        ValidationSettings.type2_enabled: "Слабый ответ — отмечать в отчёте",
+        ValidationSettings.type1_message: "Сообщение при неосмысленном ответе",
+        ValidationSettings.type2_answer_tag: "Пометка к слабому ответу для ИИ",
+        ValidationSettings.classification_prompt: "Промт для классификации ответов",
+    }
+
+    form_columns = [
+        "enabled",
+        "type1_enabled",
+        "type1_message",
+        "type2_enabled",
+        "type2_answer_tag",
+        "classification_prompt",
+    ]
+    form_args = {
+        "enabled": {
+            "label": "Валидация включена",
+            "description": "Если выключено — все ответы принимаются без проверки.",
+        },
+        "type1_enabled": {
+            "label": "Неосмысленный ответ — повторять вопрос",
+            "description": (
+                "Если включено: когда пользователь пишет случайные символы, "
+                "уклоняется от ответа или отвечает совсем не по теме — "
+                "бот не переходит к следующему вопросу, а просит ответить заново."
+            ),
+        },
+        "type1_message": {
+            "label": "Сообщение при неосмысленном ответе",
+            "description": (
+                "Текст, который увидит пользователь. "
+                "В конце автоматически добавляется повторный вопрос — "
+                "оставьте {question} там, где он должен появиться."
+            ),
+            "render_kw": {"rows": 4},
+        },
+        "type2_enabled": {
+            "label": "Слабый ответ — отмечать в отчёте",
+            "description": (
+                "Если включено: когда пользователь отвечает «не знаю», «хз», «нормально» и т.п., "
+                "бот принимает ответ и идёт дальше, но добавляет к нему пометку. "
+                "ИИ видит эту пометку при генерации отчёта и учитывает низкое качество ответа."
+            ),
+        },
+        "type2_answer_tag": {
+            "label": "Пометка к слабому ответу для ИИ",
+            "description": (
+                "Эта строка добавляется к ответу пользователя невидимо для него, "
+                "но видна ИИ при составлении отчёта. Например: "
+                "«[Пользователь не владеет темой]»."
+            ),
+        },
+        "classification_prompt": {
+            "label": "Промт для классификации ответов",
+            "description": (
+                "Инструкция для ИИ, который определяет тип каждого ответа. "
+                "Переменные {question} и {answer} подставляются автоматически — "
+                "не удаляйте их из текста."
+            ),
+            "render_kw": {"rows": 14, "style": "font-family: monospace; font-size: 13px;"},
+        },
+    }
+
+    # Это синглтон — создание и удаление запрещены
+    can_create = False
+    can_delete = False
 
 
 class ReportAdmin(ModelView, model=Report):

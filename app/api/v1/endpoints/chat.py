@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.deps import get_db
@@ -22,13 +22,19 @@ async def start_chat(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/reply", response_model=ReplyResponse)
-async def reply(body: ReplyRequest, request: Request, db: AsyncSession = Depends(get_db)):
+async def reply(
+    body: ReplyRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
     """Принимает ответ пользователя, возвращает следующее сообщение бота."""
     result = await scenario_engine.handle_reply(
         session_id=body.session_id,
         user_message=body.message,
         db=db,
         base_url=_base_url(request),
+        background_tasks=background_tasks,
     )
     return ReplyResponse(
         message=result.message,
