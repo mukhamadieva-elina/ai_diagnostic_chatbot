@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqladmin import Admin
 
-from admin.views import ScenarioAdmin, ScenarioStepAdmin, ChatSessionAdmin, ReportAdmin, ValidationSettingsAdmin
+from admin.views import GlobalSettingsAdmin, ScenarioAdmin, ScenarioStepAdmin, ChatSessionAdmin, ReportAdmin, ValidationSettingsAdmin
 from api.v1.router import router as api_router
 from db.connection import engine
 
@@ -42,6 +42,7 @@ async def serve_frontend():
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 admin = Admin(app, engine, title="AI Booster Admin")
+admin.add_view(GlobalSettingsAdmin)
 admin.add_view(ScenarioAdmin)
 admin.add_view(ScenarioStepAdmin)
 admin.add_view(ValidationSettingsAdmin)

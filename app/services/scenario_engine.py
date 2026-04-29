@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db.connection import async_session_factory
-from models.db import ChatSession, DialogEntry, Scenario, ScenarioStep, Report, ValidationSettings
+from models.db import ChatSession, DialogEntry, GlobalSettings, Scenario, ScenarioStep, Report, ValidationSettings
 from services import llm, pdf_generator, bitrix
 
 logger = logging.getLogger(__name__)
@@ -321,12 +321,18 @@ async def _generate_and_finalize(
         scenario = await db.get(Scenario, session.scenario_id)
         dialog_context = f"Сценарий диагностики: {scenario.name}\n\n{dialog_text}"
 
+        # Загружаем глобальные настройки (дефолтный промт + текст следующего шага)
+        global_settings: GlobalSettings | None = await db.get(GlobalSettings, 1)
+        global_prompt = global_settings.default_system_prompt if global_settings else None
+        next_step_text = global_settings.next_step_text if global_settings else ""
+
         # Генерируем текст отчёта.
-        # Если файл промта загружен в GigaChat — используем его, иначе текстовый промт.
+        # Приоритет: gigachat_file_id > scenario.system_prompt > global_prompt > хардкод
         llm_response = await llm.generate_report(
             dialog_text=dialog_context,
             system_prompt=scenario.system_prompt or None,
             prompt_file_id=scenario.gigachat_file_id or None,
+            global_default_prompt=global_prompt,
         )
 
         # Генерируем PDF
@@ -342,6 +348,7 @@ async def _generate_and_finalize(
             contact_phone=session.contact_phone or "",
             dialog_entries=dialog_for_pdf,
             llm_response=llm_response,
+            next_step_text=next_step_text,
         )
 
         # Сохраняем отчёт в БД

@@ -3,10 +3,48 @@ import logging
 from sqladmin import ModelView
 from starlette.requests import Request
 
-from models.db import Scenario, ScenarioStep, ChatSession, Report, ValidationSettings
+from models.db import GlobalSettings, Scenario, ScenarioStep, ChatSession, Report, ValidationSettings
 from services import llm
 
 logger = logging.getLogger(__name__)
+
+
+class GlobalSettingsAdmin(ModelView, model=GlobalSettings):
+    name = "Глобальные настройки"
+    name_plural = "Глобальные настройки"
+    icon = "fa-solid fa-gear"
+
+    column_list = [GlobalSettings.id]
+    column_labels = {
+        GlobalSettings.default_system_prompt: "Дефолтный промт (для всех сценариев)",
+        GlobalSettings.next_step_text: "Текст блока «Следующий шаг» в PDF",
+    }
+
+    form_columns = ["default_system_prompt", "next_step_text"]
+    form_args = {
+        "default_system_prompt": {
+            "label": "Дефолтный промт GigaChat (для всех сценариев)",
+            "description": (
+                "Применяется, если у сценария не задан собственный промт. "
+                "Должен содержать инструкцию для AI с четырьмя разделами: "
+                "# ОСНОВНАЯ ПРОБЛЕМА, # УРОВЕНЬ ЦИФРОВОЙ ЗРЕЛОСТИ, "
+                "# ТЕКУЩЕЕ СОСТОЯНИЕ, # РЕКОМЕНДАЦИИ."
+            ),
+            "render_kw": {"rows": 18, "style": "font-family: monospace; font-size: 13px;"},
+        },
+        "next_step_text": {
+            "label": "Текст блока «Следующий шаг» в PDF-отчёте",
+            "description": (
+                "Фиксированный текст-приглашение, который печатается в конце каждого отчёта. "
+                "Отображается в выделенном блоке. Поддерживает маркированные списки (- пункт)."
+            ),
+            "render_kw": {"rows": 8},
+        },
+    }
+
+    # Синглтон — создание и удаление запрещены
+    can_create = False
+    can_delete = False
 
 
 class ScenarioAdmin(ModelView, model=Scenario):
@@ -51,7 +89,9 @@ class ScenarioAdmin(ModelView, model=Scenario):
                 except Exception as e:
                     logger.warning("Не удалось удалить старый файл GigaChat: %s", e)
                 model.gigachat_file_id = None
-                await self.session_maker()  # обновляем запись
+                async with self.session_maker() as session:
+                    await session.merge(model)
+                    await session.commit()
             return
 
         try:

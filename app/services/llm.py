@@ -43,20 +43,31 @@ async def _get_token() -> str:
     return _cached_token
 
 
-DEFAULT_SYSTEM_PROMPT = """Ты — эксперт по цифровой трансформации и развитию бизнеса от компании AI Booster.
-Твоя задача — провести диагностику компании на основе диалога с представителем компании \
-и подготовить структурированный отчёт.
+DEFAULT_SYSTEM_PROMPT = """Ты — эксперт по цифровой трансформации от компании AI Booster.
+Проведи диагностику компании на основе диалога и сформируй структурированный отчёт.
 
-Отчёт должен содержать:
-1. РЕЗЮМЕ ПРОБЛЕМЫ — краткое описание ключевой проблемы (2-3 предложения).
-2. АНАЛИЗ СИТУАЦИИ — разбор ответов пользователя, выявление корневых причин.
-3. УРОВЕНЬ ЦИФРОВОЙ ЗРЕЛОСТИ — оценка по шкале от 1 до 5 по каждому из направлений: \
-Процессы, Данные, Технологии, Персонал. Укажи итоговый балл для каждого направления \
-в формате "Направление: N/5".
-4. РЕКОМЕНДАЦИИ — конкретные первые шаги для решения проблемы (3-5 пунктов).
-5. ПРИОРИТЕТ — какой шаг сделать первым и почему.
+Используй СТРОГО следующую структуру — четыре раздела с заголовками первого уровня:
 
-Пиши деловым, но понятным языком. Избегай воды и общих фраз."""
+# ОСНОВНАЯ ПРОБЛЕМА
+Краткое описание ключевой проблемы (2-3 предложения). Без воды.
+
+# УРОВЕНЬ ЦИФРОВОЙ ЗРЕЛОСТИ
+Оцени каждое направление по шкале 1-5 в формате "Направление: N/5":
+Процессы: N/5
+Данные: N/5
+Технологии: N/5
+Персонал: N/5
+
+# ТЕКУЩЕЕ СОСТОЯНИЕ
+Анализ ситуации: что происходит в компании, корневые причины проблем (3-5 предложений).
+
+# РЕКОМЕНДАЦИИ
+- Рекомендация 1
+- Рекомендация 2
+- Рекомендация 3
+Конкретные первые шаги (3-5 пунктов).
+
+Пиши деловым, понятным языком. Без воды и общих фраз."""
 
 
 async def upload_prompt_file(prompt_text: str, scenario_name: str) -> str:
@@ -97,20 +108,20 @@ async def generate_report(
     dialog_text: str,
     system_prompt: str | None = None,
     prompt_file_id: str | None = None,
+    global_default_prompt: str | None = None,
 ) -> str:
     """
     Генерирует отчёт через GigaChat.
 
     Приоритет промта:
-      1. prompt_file_id — файл загружен в хранилище GigaChat, передаётся в attachments
-      2. system_prompt  — текст промта передаётся напрямую в system message
-      3. DEFAULT_SYSTEM_PROMPT — дефолтный промт если ничего не задано
+      1. prompt_file_id        — файл сценария в хранилище GigaChat (attachments)
+      2. system_prompt         — кастомный промт сценария (text)
+      3. global_default_prompt — глобальный дефолт из БД
+      4. DEFAULT_SYSTEM_PROMPT — хардкод-запасной вариант
     """
     token = await _get_token()
 
     if prompt_file_id:
-        # Промт хранится в GigaChat — передаём file_id в attachments,
-        # system message минимальный
         payload = {
             "model": "GigaChat-2-Max",
             "messages": [
@@ -124,10 +135,11 @@ async def generate_report(
             "temperature": 0.7,
         }
     else:
+        effective_prompt = system_prompt or global_default_prompt or DEFAULT_SYSTEM_PROMPT
         payload = {
             "model": "GigaChat",
             "messages": [
-                {"role": "system", "content": system_prompt or DEFAULT_SYSTEM_PROMPT},
+                {"role": "system", "content": effective_prompt},
                 {"role": "user", "content": dialog_text},
             ],
             "stream": False,
