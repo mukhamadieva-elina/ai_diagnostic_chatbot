@@ -141,41 +141,41 @@ def _build_styles() -> dict:
 
 # ── LLM response parsing ────────────────────────────────────────────────────
 
-_SECTION_ALIASES: dict[str, list[str]] = {
-    "problem":         ["ОСНОВНАЯ ПРОБЛЕМА", "РЕЗЮМЕ ПРОБЛЕМЫ"],
-    "level":           ["УРОВЕНЬ ЦИФРОВОЙ ЗРЕЛОСТИ", "УРОВЕНЬ ЗРЕЛОСТИ"],
-    "state":           ["ТЕКУЩЕЕ СОСТОЯНИЕ", "АНАЛИЗ СИТУАЦИИ", "АНАЛИЗ"],
-    "recommendations": ["РЕКОМЕНДАЦИИ"],
-}
-
-
-def _parse_llm_sections(text: str) -> dict[str, str]:
-    """Split LLM markdown into named sections by top-level headings."""
-    raw: dict[str, str] = {}
-    current_key: str | None = None
+def _parse_sections_generic(text: str) -> list[tuple[str, str]]:
+    """Split LLM markdown into ordered (title, content) pairs by # headings."""
+    sections: list[tuple[str, str]] = []
+    current_title: str | None = None
     current_lines: list[str] = []
 
     for line in text.split("\n"):
         if line.startswith("# "):
-            if current_key is not None:
-                raw[current_key] = "\n".join(current_lines).strip()
-            current_key = line[2:].strip().upper()
+            if current_title is not None:
+                sections.append((current_title, "\n".join(current_lines).strip()))
+            current_title = line[2:].strip()
             current_lines = []
         else:
-            if current_key is not None:
+            if current_title is not None:
                 current_lines.append(line)
 
-    if current_key is not None:
-        raw[current_key] = "\n".join(current_lines).strip()
+    if current_title is not None:
+        sections.append((current_title, "\n".join(current_lines).strip()))
 
-    result: dict[str, str] = {}
-    for canonical, aliases in _SECTION_ALIASES.items():
-        for alias in aliases:
-            if alias in raw:
-                result[canonical] = raw[alias]
-                break
+    return sections
 
-    return result
+
+def _has_maturity_scores(text: str) -> bool:
+    """True if the text contains at least one 'Dimension: N/5' score."""
+    dimensions = ["Процессы", "Данные", "Технологии", "Персонал"]
+    return any(
+        re.search(rf"{dim}[:\s]+\d[\.,]?\d?\s*/\s*5", text, re.IGNORECASE)
+        for dim in dimensions
+    )
+
+
+def _is_maturity_section(title: str) -> bool:
+    """True if the section title refers to a maturity/level section."""
+    upper = title.upper()
+    return any(kw in upper for kw in ("ЗРЕЛОСТ", "УРОВЕНЬ"))
 
 
 def _section_to_flowables(text: str, styles: dict) -> list:
@@ -319,7 +319,6 @@ def generate_pdf(
     contact_name: str,
     contact_email: str,
     contact_phone: str,
-    dialog_entries: list[dict],
     llm_response: str,
     next_step_text: str = "",
 ) -> str:
@@ -376,69 +375,35 @@ def generate_pdf(
     for line in client_lines:
         story.append(Paragraph(line, styles["body"]))
 
-    # ── 2. Диалог с диагностом ──────────────────────────────────────────────
-    if dialog_entries:
-        story.append(gap())
-        story.append(section_h1("Диалог с диагностом"))
-        for entry in dialog_entries:
-            question = html.escape(entry.get("question", ""))
-            answer = html.escape(entry.get("answer", "") or "—")
-            story.append(Paragraph(
-                f'<font name="{_FONT_BOLD}">Вопрос:</font> {question}',
-                styles["body"],
-            ))
-            story.append(Paragraph(
-                f'<font name="{_FONT_BOLD}">Ответ:</font> {answer}',
-                styles["body"],
-            ))
+    # ── AI-разделы (любые # Заголовок из ответа GigaChat) ──────────────────
+    sections = _parse_sections_generic(llm_response)
 
-    # ── Parse LLM sections ──────────────────────────────────────────────────
-    sections = _parse_llm_sections(llm_response)
-    scores = _parse_maturity_scores(llm_response)
+    if sections:
+        for title, content in sections:
+            story.append(gap())
+            story.append(section_h1(title))
 
-    # ── 3. Основная проблема ────────────────────────────────────────────────
-    story.append(gap())
-    story.append(section_h1("Основная проблема"))
-    if "problem" in sections:
-        story.extend(_section_to_flowables(sections["problem"], styles))
+            if _is_maturity_section(title) or _has_maturity_scores(content):
+                scores = _parse_maturity_scores(content)
+                story.append(Paragraph(_maturity_level_name(scores), styles["level_badge"]))
+                story.extend(_section_to_flowables(content, styles))
+                radar_buf = _make_radar_chart(scores)
+                bar_buf = _make_bar_chart(scores)
+                chart_table = Table(
+                    [[Image(radar_buf, width=7 * cm, height=7 * cm),
+                      Image(bar_buf, width=9 * cm, height=5 * cm)]],
+                    colWidths=[usable_width * 0.44, usable_width * 0.56],
+                )
+                chart_table.setStyle(TableStyle([
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("ALIGN",  (0, 0), (-1, -1), "CENTER"),
+                ]))
+                story.append(Spacer(1, 4 * mm))
+                story.append(chart_table)
+            else:
+                story.extend(_section_to_flowables(content, styles))
     else:
-        story.append(Paragraph(_apply_highlights(llm_response.split("\n")[0]), styles["body"]))
-
-    # ── 4. Уровень цифровой зрелости ────────────────────────────────────────
-    story.append(gap())
-    story.append(section_h1("Уровень цифровой зрелости"))
-    story.append(Paragraph(_maturity_level_name(scores), styles["level_badge"]))
-    if "level" in sections:
-        story.extend(_section_to_flowables(sections["level"], styles))
-
-    radar_buf = _make_radar_chart(scores)
-    bar_buf = _make_bar_chart(scores)
-    chart_table = Table(
-        [[Image(radar_buf, width=7 * cm, height=7 * cm),
-          Image(bar_buf, width=9 * cm, height=5 * cm)]],
-        colWidths=[usable_width * 0.44, usable_width * 0.56],
-    )
-    chart_table.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("ALIGN",  (0, 0), (-1, -1), "CENTER"),
-    ]))
-    story.append(Spacer(1, 4 * mm))
-    story.append(chart_table)
-
-    # ── 5. Текущее состояние ────────────────────────────────────────────────
-    if "state" in sections:
-        story.append(gap())
-        story.append(section_h1("Текущее состояние"))
-        story.extend(_section_to_flowables(sections["state"], styles))
-
-    # ── 6. Рекомендации ─────────────────────────────────────────────────────
-    if "recommendations" in sections:
-        story.append(gap())
-        story.append(section_h1("Рекомендации"))
-        story.extend(_section_to_flowables(sections["recommendations"], styles))
-
-    # Fallback: если LLM не вернул структурированные разделы
-    if not sections:
+        # Fallback: LLM не вернул структурированные разделы
         story.append(gap())
         story.append(section_h1("AI-анализ и рекомендации"))
         for line in llm_response.split("\n"):

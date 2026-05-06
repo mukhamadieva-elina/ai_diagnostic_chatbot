@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 
 _GIGACHAT_TOKEN_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
 _GIGACHAT_CHAT_URL = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
-_GIGACHAT_FILES_URL = "https://gigachat.devices.sberbank.ru/api/v1/files"
 
 _cached_token: str | None = None
 _token_expires_at: datetime | None = None
@@ -70,81 +69,34 @@ DEFAULT_SYSTEM_PROMPT = """Ты — эксперт по цифровой тра�
 Пиши деловым, понятным языком. Без воды и общих фраз."""
 
 
-async def upload_prompt_file(prompt_text: str, scenario_name: str) -> str:
-    """
-    Загружает текст промта как .txt файл в хранилище GigaChat.
-    Возвращает file_id для использования в attachments.
-    """
-    token = await _get_token()
-    filename = f"prompt_{scenario_name.replace(' ', '_')}.txt"
-
-    async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
-        response = await client.post(
-            _GIGACHAT_FILES_URL,
-            headers={"Authorization": f"Bearer {token}"},
-            files={"file": (filename, prompt_text.encode("utf-8"), "text/plain")},
-            data={"purpose": "general"},
-        )
-        response.raise_for_status()
-
-    file_id = response.json()["id"]
-    logger.info("Промт сценария '%s' загружен в GigaChat, file_id: %s", scenario_name, file_id)
-    return file_id
-
-
-async def delete_file(file_id: str) -> None:
-    """Удаляет файл из хранилища GigaChat (вызывается при замене промта)."""
-    token = await _get_token()
-    async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
-        response = await client.delete(
-            f"{_GIGACHAT_FILES_URL}/{file_id}",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-    if response.status_code not in (200, 204):
-        logger.warning("Не удалось удалить файл %s из GigaChat: %s", file_id, response.text)
-
-
 async def generate_report(
     dialog_text: str,
-    system_prompt: str | None = None,
-    prompt_file_id: str | None = None,
+    scenario_prompt: str | None = None,
     global_default_prompt: str | None = None,
 ) -> str:
     """
     Генерирует отчёт через GigaChat.
 
-    Приоритет промта:
-      1. prompt_file_id        — файл сценария в хранилище GigaChat (attachments)
-      2. system_prompt         — кастомный промт сценария (text)
-      3. global_default_prompt — глобальный дефолт из БД
-      4. DEFAULT_SYSTEM_PROMPT — хардкод-запасной вариант
+    Итоговый промт = универсальный (global_default_prompt или DEFAULT_SYSTEM_PROMPT)
+    + промт сценария (scenario_prompt), если он задан — объединяются через разделитель.
     """
     token = await _get_token()
 
-    if prompt_file_id:
-        payload = {
-            "model": "GigaChat-2-Max",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": dialog_text,
-                    "attachments": [prompt_file_id],
-                },
-            ],
-            "stream": False,
-            "temperature": 0.7,
-        }
+    base_prompt = global_default_prompt or DEFAULT_SYSTEM_PROMPT
+    if scenario_prompt:
+        effective_prompt = f"{base_prompt}\n\n---\n\n{scenario_prompt}"
     else:
-        effective_prompt = system_prompt or global_default_prompt or DEFAULT_SYSTEM_PROMPT
-        payload = {
-            "model": "GigaChat",
-            "messages": [
-                {"role": "system", "content": effective_prompt},
-                {"role": "user", "content": dialog_text},
-            ],
-            "stream": False,
-            "temperature": 0.7,
-        }
+        effective_prompt = base_prompt
+
+    payload = {
+        "model": "GigaChat",
+        "messages": [
+            {"role": "system", "content": effective_prompt},
+            {"role": "user", "content": dialog_text},
+        ],
+        "stream": False,
+        "temperature": 0.7,
+    }
 
     headers = {
         "Content-Type": "application/json",

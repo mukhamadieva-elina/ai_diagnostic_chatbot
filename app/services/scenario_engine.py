@@ -326,27 +326,20 @@ async def _generate_and_finalize(
         global_prompt = global_settings.default_system_prompt if global_settings else None
         next_step_text = global_settings.next_step_text if global_settings else ""
 
-        # Генерируем текст отчёта.
-        # Приоритет: gigachat_file_id > scenario.system_prompt > global_prompt > хардкод
+        # Итоговый промт = глобальный дефолт + промт сценария (если задан)
         llm_response = await llm.generate_report(
             dialog_text=dialog_context,
-            system_prompt=scenario.system_prompt or None,
-            prompt_file_id=scenario.gigachat_file_id or None,
+            scenario_prompt=scenario.system_prompt or None,
             global_default_prompt=global_prompt,
         )
 
         # Генерируем PDF
-        dialog_for_pdf = [
-            {"question": e.bot_message, "answer": e.user_answer or "—"}
-            for e in entries
-        ]
         pdf_path = pdf_generator.generate_pdf(
             session_id=session.id,
             scenario_name=scenario.name,
             contact_name=session.contact_name or "",
             contact_email=session.contact_email or "",
             contact_phone=session.contact_phone or "",
-            dialog_entries=dialog_for_pdf,
             llm_response=llm_response,
             next_step_text=next_step_text,
         )

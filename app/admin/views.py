@@ -1,10 +1,8 @@
 import logging
 
 from sqladmin import ModelView
-from starlette.requests import Request
 
 from models.db import GlobalSettings, Scenario, ScenarioStep, ChatSession, Report, ValidationSettings
-from services import llm
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +21,13 @@ class GlobalSettingsAdmin(ModelView, model=GlobalSettings):
     form_columns = ["default_system_prompt", "next_step_text"]
     form_args = {
         "default_system_prompt": {
-            "label": "Дефолтный промт GigaChat (для всех сценариев)",
+            "label": "Универсальный промт GigaChat (для всех сценариев)",
             "description": (
-                "Применяется, если у сценария не задан собственный промт. "
-                "Должен содержать инструкцию для AI с четырьмя разделами: "
-                "# ОСНОВНАЯ ПРОБЛЕМА, # УРОВЕНЬ ЦИФРОВОЙ ЗРЕЛОСТИ, "
-                "# ТЕКУЩЕЕ СОСТОЯНИЕ, # РЕКОМЕНДАЦИИ."
+                "Базовая инструкция для AI — применяется ко всем сценариям. "
+                "Если у сценария задан дополнительный промт, он добавляется к этому через разделитель. "
+                "Укажите в промте, какие разделы должен содержать отчёт — каждый раздел начинается "
+                "с заголовка первого уровня, например: # ОСНОВНАЯ ПРОБЛЕМА, # РЕКОМЕНДАЦИИ. "
+                "PDF сформирует ровно те разделы, которые вернёт GigaChat."
             ),
             "render_kw": {"rows": 18, "style": "font-family: monospace; font-size: 13px;"},
         },
@@ -52,18 +51,20 @@ class ScenarioAdmin(ModelView, model=Scenario):
     name_plural = "Сценарии"
     icon = "fa-solid fa-list-check"
 
-    column_list = [Scenario.id, Scenario.name, Scenario.is_active, Scenario.gigachat_file_id]
-    column_labels = {Scenario.gigachat_file_id: "GigaChat file_id"}
+    column_list = [Scenario.id, Scenario.name, Scenario.is_active]
     column_searchable_list = [Scenario.name]
     column_sortable_list = [Scenario.id, Scenario.name]
     form_columns = ["name", "description", "is_active", "system_prompt"]
     form_args = {
         "system_prompt": {
-            "label": "Системный промт для GigaChat",
+            "label": "Дополнительный промт сценария",
             "description": (
-                "Инструкция для AI. После сохранения автоматически загрузится "
-                "в хранилище GigaChat и будет передаваться через attachments. "
-                "Если оставить пустым — будет использован стандартный промт."
+                "Уточнения для AI, специфичные для данного сценария. "
+                "Объединяется с универсальным промтом и передаётся в GigaChat вместе. "
+                "Здесь можно переопределить или дополнить список разделов отчёта — "
+                "укажите нужные заголовки в формате # НАЗВАНИЕ РАЗДЕЛА, "
+                "и PDF сформирует именно их. "
+                "Если оставить пустым — используется только универсальный промт."
             ),
             "render_kw": {"rows": 14, "style": "font-family: monospace; font-size: 13px;"},
         },
@@ -72,49 +73,6 @@ class ScenarioAdmin(ModelView, model=Scenario):
             "render_kw": {"rows": 3},
         },
     }
-
-    async def after_model_change(self, data: dict, model: Scenario, is_created: bool, request: Request) -> None:
-        """
-        Хук после сохранения сценария.
-        Если system_prompt заполнен — загружает его как файл в GigaChat
-        и сохраняет полученный file_id. Старый файл при этом удаляется.
-        """
-        new_prompt = (model.system_prompt or "").strip()
-
-        if not new_prompt:
-            # Промт очищен — удаляем старый файл из GigaChat если был
-            if model.gigachat_file_id:
-                try:
-                    await llm.delete_file(model.gigachat_file_id)
-                except Exception as e:
-                    logger.warning("Не удалось удалить старый файл GigaChat: %s", e)
-                model.gigachat_file_id = None
-                async with self.session_maker() as session:
-                    await session.merge(model)
-                    await session.commit()
-            return
-
-        try:
-            # Удаляем предыдущий файл если он есть
-            if model.gigachat_file_id:
-                try:
-                    await llm.delete_file(model.gigachat_file_id)
-                except Exception as e:
-                    logger.warning("Не удалось удалить старый файл GigaChat %s: %s", model.gigachat_file_id, e)
-
-            # Загружаем новый файл
-            file_id = await llm.upload_prompt_file(new_prompt, model.name)
-            model.gigachat_file_id = file_id
-
-            # Сохраняем file_id в БД через сессию
-            async with self.session_maker() as session:
-                await session.merge(model)
-                await session.commit()
-
-            logger.info("Сценарий '%s': промт загружен в GigaChat, file_id=%s", model.name, file_id)
-
-        except Exception as e:
-            logger.error("Не удалось загрузить промт в GigaChat для сценария '%s': %s", model.name, e)
 
 
 class ScenarioStepAdmin(ModelView, model=ScenarioStep):
