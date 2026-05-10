@@ -14,6 +14,8 @@ _GIGACHAT_CHAT_URL = "https://gigachat.devices.sberbank.ru/api/v1/chat/completio
 _cached_token: str | None = None
 _token_expires_at: datetime | None = None
 
+_http_client: httpx.AsyncClient = httpx.AsyncClient(verify=False, timeout=60.0)
+
 
 async def _get_token() -> str:
     global _cached_token, _token_expires_at
@@ -27,19 +29,55 @@ async def _get_token() -> str:
         "RqUID": str(uuid.uuid4()),
         "Authorization": f"Basic {settings.gigachat_auth_token}",
     }
-    async with httpx.AsyncClient(verify=False) as client:
-        response = await client.post(
-            _GIGACHAT_TOKEN_URL,
-            headers=headers,
-            data={"scope": "GIGACHAT_API_PERS"},
-            follow_redirects=True,
-        )
-        response.raise_for_status()
-        data = response.json()
+    response = await _http_client.post(
+        _GIGACHAT_TOKEN_URL,
+        headers=headers,
+        data={"scope": "GIGACHAT_API_PERS"},
+        follow_redirects=True,
+    )
+    response.raise_for_status()
+    data = response.json()
 
     _cached_token = data["access_token"]
     _token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=28)
     return _cached_token
+
+
+_MATURITY_CHART_SUFFIX = """
+
+---
+
+ФОРМАТ ОТЧЁТА — строго четыре раздела. Заголовки только одиночным # точно как указано ниже (без номеров, без дополнительных слов в заголовке):
+
+# ОСНОВНАЯ ПРОБЛЕМА
+2-3 предложения о ключевой проблеме компании.
+
+# УРОВЕНЬ ЦИФРОВОЙ ЗРЕЛОСТИ
+Оценки по вопросам 1–5 ТОЛЬКО в виде маркированного списка (НЕ таблицей, без пояснений и цитат — только уровень):
+- Вопрос 1 (тема): Уровень
+- Вопрос 2 (тема): Уровень
+- Вопрос 3 (тема): Уровень
+- Вопрос 4 (тема): Уровень
+- Вопрос 5 (тема): Уровень
+Итого: низких — N, средних — N, высоких — N
+Общий уровень: Название
+Контекст:
+- Вопрос 6: краткое резюме
+- Вопрос 7: краткое резюме
+Затем в конце раздела (без подзаголовков) ровно четыре строки:
+
+
+
+Процессы: N/5
+Данные: N/5
+Технологии: N/5
+Персонал: N/5
+
+# ТЕКУЩЕЕ СОСТОЯНИЕ
+3-5 предложений: анализ ситуации, корневые причины.
+
+# РЕКОМЕНДАЦИИ
+3-5 конкретных шагов маркированным списком."""
 
 
 DEFAULT_SYSTEM_PROMPT = """Ты — эксперт по цифровой трансформации от компании AI Booster.
@@ -87,6 +125,7 @@ async def generate_report(
         effective_prompt = f"{base_prompt}\n\n---\n\n{scenario_prompt}"
     else:
         effective_prompt = base_prompt
+    effective_prompt = f"{effective_prompt}{_MATURITY_CHART_SUFFIX}"
 
     payload = {
         "model": "GigaChat",
@@ -96,6 +135,7 @@ async def generate_report(
         ],
         "stream": False,
         "temperature": 0.7,
+        "max_tokens": 2000,
     }
 
     headers = {
@@ -103,10 +143,8 @@ async def generate_report(
         "Accept": "application/json",
         "Authorization": f"Bearer {token}",
     }
-    async with httpx.AsyncClient(verify=False, timeout=60.0) as client:
-        response = await client.post(_GIGACHAT_CHAT_URL, headers=headers, json=payload)
-        response.raise_for_status()
-
+    response = await _http_client.post(_GIGACHAT_CHAT_URL, headers=headers, json=payload)
+    response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"]
 
 
@@ -115,7 +153,7 @@ _VALIDATION_PROMPT_TEMPLATE = (
     "ТИП 1 — НЕОСМЫСЛЕННЫЙ: случайные символы/буквы, ответ не по теме вопроса, "
     "намеренное уклонение («пропустить», «не хочу отвечать», «неважно»).\n"
     "ТИП 2 — НИЗКИЙ УРОВЕНЬ: пользователь не владеет темой, короткие ответы без контекста "
-    "(«не знаю», «хз», «сложно сказать», «всё плохо», «нормально», «никак», «не думали об этом»).\n"
+    "(«не знаю», «сложно сказать», «всё плохо», «нормально», «никак», «не думали об этом»).\n"
     "ТИП 3 — ОСМЫСЛЕННЫЙ: описывает реальную ситуацию в компании, ответ относится к вопросу, "
     "даже короткий но содержательный («CRM не используем», «всё в Excel», «менеджеры работают по-своему»).\n\n"
     "Вопрос: {question}\n"
@@ -145,9 +183,8 @@ async def validate_answer(question: str, answer: str, prompt_template: str | Non
             "Accept": "application/json",
             "Authorization": f"Bearer {token}",
         }
-        async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
-            response = await client.post(_GIGACHAT_CHAT_URL, headers=headers, json=payload)
-            response.raise_for_status()
+        response = await _http_client.post(_GIGACHAT_CHAT_URL, headers=headers, json=payload)
+        response.raise_for_status()
 
         text = response.json()["choices"][0]["message"]["content"].strip().upper()
         if "TYPE1" in text:

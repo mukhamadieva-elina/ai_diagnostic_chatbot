@@ -2,6 +2,7 @@
 Движок сценария: ведёт сессию по шагам и формирует ответы бота.
 Вся логика состояний живёт здесь — эндпоинты только передают данные.
 """
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
@@ -178,6 +179,7 @@ async def _handle_scenario_selection(
     session.current_step_index = 1
     session.status = "in_progress"
 
+    total_steps = len(chosen.steps)
     first_step = chosen.steps[0]
     db.add(DialogEntry(
         session_id=session.id,
@@ -186,7 +188,7 @@ async def _handle_scenario_selection(
         user_answer=None,
     ))
     await db.commit()
-    return BotReply(message=first_step.message_text, status="question")
+    return BotReply(message=f"Вопрос 1 / {total_steps}\n{first_step.message_text}", status="question")
 
 
 async def _handle_step_answer(
@@ -225,15 +227,16 @@ async def _handle_step_answer(
 
     if current_index < total_steps:
         next_step = steps[current_index]  # current_index как 0-based указывает на следующий
-        session.current_step_index = current_index + 1
+        next_question_number = current_index + 1
+        session.current_step_index = next_question_number
         db.add(DialogEntry(
             session_id=session.id,
-            step_index=current_index + 1,
+            step_index=next_question_number,
             bot_message=next_step.message_text,
             user_answer=None,
         ))
         await db.commit()
-        return BotReply(message=next_step.message_text, status="question")
+        return BotReply(message=f"Вопрос {next_question_number} / {total_steps}\n{next_step.message_text}", status="question")
 
     # Все шаги пройдены — переходим к сбору контактов
     session.status = "pending_contact"
@@ -333,8 +336,9 @@ async def _generate_and_finalize(
             global_default_prompt=global_prompt,
         )
 
-        # Генерируем PDF
-        pdf_path = pdf_generator.generate_pdf(
+        # Генерируем PDF в отдельном потоке (matplotlib блокирующий)
+        pdf_path = await asyncio.to_thread(
+            pdf_generator.generate_pdf,
             session_id=session.id,
             scenario_name=scenario.name,
             contact_name=session.contact_name or "",

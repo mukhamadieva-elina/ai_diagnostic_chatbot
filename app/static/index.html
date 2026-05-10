@@ -366,10 +366,7 @@
     div.className = 'msg bot';
     div.innerHTML = `
       <div class="avatar">AI</div>
-      <div class="bubble">
-        ${escapeHtml(text)}
-        ${reportUrl ? `<br><a class="report-btn" href="${reportUrl}" target="_blank" download>📄 Скачать отчёт PDF</a>` : ''}
-      </div>`;
+      <div class="bubble">${escapeHtml(text)}${reportUrl ? `<br><a class="report-btn" href="${reportUrl}" target="_blank" download>📄 Скачать отчёт PDF</a>` : ''}</div>`;
     msgs.appendChild(div);
     scrollBottom();
   }

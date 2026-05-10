@@ -164,12 +164,11 @@ def _parse_sections_generic(text: str) -> list[tuple[str, str]]:
 
 
 def _has_maturity_scores(text: str) -> bool:
-    """True if the text contains at least one 'Dimension: N/5' score."""
+    """True if the text contains maturity scores in any format."""
     dimensions = ["Процессы", "Данные", "Технологии", "Персонал"]
-    return any(
-        re.search(rf"{dim}[:\s]+\d[\.,]?\d?\s*/\s*5", text, re.IGNORECASE)
-        for dim in dimensions
-    )
+    has_dim = any(re.search(rf"\b{dim}\b", text, re.IGNORECASE) for dim in dimensions)
+    has_score = bool(re.search(r"\d[\.,]?\d?\s*/\s*5", text))
+    return has_dim and has_score
 
 
 def _is_maturity_section(title: str) -> bool:
@@ -246,11 +245,63 @@ def _maturity_level_name(scores: dict[str, float]) -> str:
 
 
 def _parse_maturity_scores(llm_text: str) -> dict[str, float]:
-    dimensions = {"Процессы": 0.0, "Данные": 0.0, "Технологии": 0.0, "Персонал": 0.0}
-    for dim in dimensions:
-        match = re.search(rf"{dim}[:\s]+(\d[\.,]?\d?)\s*/\s*5", llm_text, re.IGNORECASE)
-        dimensions[dim] = float(match.group(1).replace(",", ".")) if match else 2.5
-    return dimensions
+    dims = ["Процессы", "Данные", "Технологии", "Персонал"]
+    result = {d: 0.0 for d in dims}
+
+    # 1. Inline format: "Процессы: 3/5" or "**Процессы: 3/5**"
+    for dim in dims:
+        m = re.search(rf"{dim}[*:\s]+(\d[\.,]?\d?)\s*/\s*5", llm_text, re.IGNORECASE)
+        if m:
+            result[dim] = float(m.group(1).replace(",", "."))
+
+    # 2. Horizontal table: header row has dim names, score row has N/5 values
+    if any(v == 0.0 for v in result.values()):
+        lines = llm_text.split("\n")
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped.startswith("|"):
+                continue
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            col_map = {
+                col: dim
+                for col, cell in enumerate(cells)
+                for dim in dims
+                if dim.lower() in cell.lower()
+            }
+            if not col_map:
+                continue
+            for j in range(i + 1, min(i + 4, len(lines))):
+                score_line = lines[j].strip()
+                if not score_line.startswith("|"):
+                    continue
+                if re.match(r"^\|[-: |]+\|$", score_line):
+                    continue
+                score_cells = [c.strip() for c in score_line.strip("|").split("|")]
+                for col, dim in col_map.items():
+                    if col < len(score_cells) and result[dim] == 0.0:
+                        m = re.search(r"(\d[\.,]?\d?)\s*(?:/\s*5)?", score_cells[col])
+                        if m:
+                            val = float(m.group(1).replace(",", "."))
+                            if 0 < val <= 5:
+                                result[dim] = val
+                break
+
+    return {d: v if v > 0.0 else 2.5 for d, v in result.items()}
+
+
+def _strip_score_lines(text: str) -> str:
+    """Убирает N/5 строки в любом формате и строки markdown-таблиц из секции зрелости."""
+    # Совпадает с любым форматом: "Процессы: 2/5", "## Процессы: 2/5", "**Процессы: 2/5**"
+    score_line = re.compile(
+        r"^(?:[#*\s]*)?(Процессы|Данные|Технологии|Персонал)[*:\s]+\d[\.,]?\d?\s*/\s*5[*\s]*$",
+        re.IGNORECASE,
+    )
+    table_row = re.compile(r"^\|.+\|$")
+    lines = [
+        line for line in text.split("\n")
+        if not score_line.match(line.strip()) and not table_row.match(line.strip())
+    ]
+    return "\n".join(lines)
 
 
 def _make_radar_chart(scores: dict[str, float]) -> io.BytesIO:
@@ -261,18 +312,22 @@ def _make_radar_chart(scores: dict[str, float]) -> io.BytesIO:
     values_c = values + [values[0]]
     angles_c = angles + [angles[0]]
 
-    fig, ax = plt.subplots(figsize=(4, 4), subplot_kw={"polar": True})
+    fig, ax = plt.subplots(figsize=(4.5, 4.5), subplot_kw={"polar": True})
     fig.patch.set_alpha(0)
     ax.patch.set_alpha(0)
+    # Начинаем сверху, по часовой — метки равномерно по кардинальным точкам
+    ax.set_theta_offset(np.pi / 2)
+    ax.set_theta_direction(-1)
     ax.plot(angles_c, values_c, color=_ACCENT_HEX, linewidth=2)
     ax.fill(angles_c, values_c, color=_ACCENT_HEX, alpha=0.25)
     ax.set_xticks(angles)
-    ax.set_xticklabels(labels, fontsize=9)
+    ax.set_xticklabels(labels, fontsize=8)
+    ax.tick_params(axis="x", pad=18)
     ax.set_ylim(0, 5)
     ax.set_yticks([1, 2, 3, 4, 5])
     ax.set_yticklabels(["1", "2", "3", "4", "5"], fontsize=7)
     ax.grid(color="gray", linestyle="--", linewidth=0.5, alpha=0.7)
-    ax.set_title("Цифровая зрелость", pad=15, fontsize=10, fontweight="bold", color="#1D1D1D")
+    ax.set_title("Цифровая зрелость", pad=20, fontsize=10, fontweight="bold", color="#1D1D1D")
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=120, bbox_inches="tight", transparent=True)
@@ -300,9 +355,10 @@ def _make_bar_chart(scores: dict[str, float]) -> io.BytesIO:
     ax.invert_yaxis()
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    good = mpatches.Patch(color=_ACCENT_HEX, label="≥ 3 — удовлетворительно")
+    good = mpatches.Patch(color=_ACCENT_HEX, label="≥ 3 — удовл.")
     bad = mpatches.Patch(color="#FF7043", label="< 3 — требует внимания")
-    ax.legend(handles=[good, bad], fontsize=7, loc="lower right")
+    ax.legend(handles=[good, bad], fontsize=7, loc="lower right",
+              bbox_to_anchor=(1.0, -0.28), ncol=2, frameon=False)
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=120, bbox_inches="tight", transparent=True)
@@ -383,16 +439,17 @@ def generate_pdf(
             story.append(gap())
             story.append(section_h1(title))
 
-            if _is_maturity_section(title) or _has_maturity_scores(content):
+            if _is_maturity_section(title):
                 scores = _parse_maturity_scores(content)
-                story.append(Paragraph(_maturity_level_name(scores), styles["level_badge"]))
-                story.extend(_section_to_flowables(content, styles))
+                story.extend(_section_to_flowables(_strip_score_lines(content), styles))
                 radar_buf = _make_radar_chart(scores)
                 bar_buf = _make_bar_chart(scores)
+                radar_col = usable_width * 0.44
+                bar_col = usable_width * 0.56
                 chart_table = Table(
-                    [[Image(radar_buf, width=7 * cm, height=7 * cm),
-                      Image(bar_buf, width=9 * cm, height=5 * cm)]],
-                    colWidths=[usable_width * 0.44, usable_width * 0.56],
+                    [[Image(radar_buf, width=radar_col, height=radar_col),
+                      Image(bar_buf, width=bar_col, height=radar_col * 0.72)]],
+                    colWidths=[radar_col, bar_col],
                 )
                 chart_table.setStyle(TableStyle([
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
