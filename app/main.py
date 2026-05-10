@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqladmin import Admin
 
+from admin.auth import AdminBasicAuthMiddleware
 from admin.views import GlobalSettingsAdmin, ScenarioAdmin, ScenarioStepAdmin, ChatSessionAdmin, ReportAdmin, ValidationSettingsAdmin
 from api.v1.router import router as api_router
 from db.connection import engine
@@ -26,6 +27,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(AdminBasicAuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # ограничьте до домена лендинга в проде

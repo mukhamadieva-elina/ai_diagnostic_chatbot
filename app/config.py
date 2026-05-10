@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     gigachat_auth_token: str
     reports_dir: str = "./reports"
 
+    admin_username: str = "admin"
+    admin_password: str = "changeme"
+
     bitrix_portal: str = ""
     bitrix_user_id: str = ""
     bitrix_webhook_token: str = ""

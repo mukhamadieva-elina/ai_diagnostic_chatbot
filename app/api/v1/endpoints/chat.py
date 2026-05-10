@@ -4,7 +4,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.deps import get_db
-from schemas.chat import ReplyRequest, ReplyResponse, SessionStateResponse, StartResponse
+from schemas.chat import ContactsRequest, ReplyRequest, ReplyResponse, SessionStateResponse, StartResponse
 from services import scenario_engine
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -32,6 +32,30 @@ async def reply(
     result = await scenario_engine.handle_reply(
         session_id=body.session_id,
         user_message=body.message,
+        db=db,
+        base_url=_base_url(request),
+        background_tasks=background_tasks,
+    )
+    return ReplyResponse(
+        message=result.message,
+        status=result.status,
+        report_url=result.report_url,
+    )
+
+
+@router.post("/contacts", response_model=ReplyResponse)
+async def submit_contacts(
+    body: ContactsRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Принимает контактные данные из модального окна и запускает генерацию отчёта."""
+    result = await scenario_engine.submit_contacts(
+        session_id=body.session_id,
+        name=body.name,
+        email=body.email,
+        phone=body.phone,
         db=db,
         base_url=_base_url(request),
         background_tasks=background_tasks,

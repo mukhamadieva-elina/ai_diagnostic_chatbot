@@ -21,6 +21,13 @@ class ReplyResponse(BaseModel):
     report_url: str | None = None
 
 
+class ContactsRequest(BaseModel):
+    session_id: uuid.UUID
+    name: str
+    email: str
+    phone: str
+
+
 class SessionStateResponse(BaseModel):
     session_id: uuid.UUID
     status: str

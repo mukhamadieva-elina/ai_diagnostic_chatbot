@@ -222,6 +222,80 @@
     }
     .new-chat-btn:hover { background: rgba(255,255,255,0.25); }
 
+    /* Inline contact form */
+    .contact-form {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 10px;
+      white-space: normal;
+    }
+    .contact-form-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .contact-form-field label {
+      font-size: 11px;
+      font-weight: 600;
+      color: #555;
+    }
+    .contact-form-field input {
+      border: 1.5px solid #d0d0d0;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      background: #fff;
+      transition: border-color 0.2s;
+    }
+    .contact-form-field input:focus { border-color: #2196F3; }
+    .contact-form-field input.invalid { border-color: #e53935; }
+    .contact-form .field-error {
+      font-size: 11px;
+      color: #e53935;
+      display: none;
+    }
+    .contact-form .field-error.visible { display: block; }
+    .contact-form-submit {
+      padding: 9px;
+      background: #1A3C6E;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 2px;
+      transition: background 0.2s;
+    }
+    .contact-form-submit:hover:not(:disabled) { background: #2196F3; }
+    .contact-form-submit:disabled { opacity: 0.5; cursor: default; }
+
+    /* Кнопки выбора сценария */
+    .scenario-options {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .scenario-btn {
+      background: #fff;
+      border: 1.5px solid #1A3C6E;
+      color: #1A3C6E;
+      border-radius: 10px;
+      padding: 9px 14px;
+      font-size: 14px;
+      font-family: inherit;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.15s, color 0.15s;
+      line-height: 1.3;
+    }
+    .scenario-btn:hover { background: #1A3C6E; color: #fff; }
+    .scenario-btn:disabled { opacity: 0.4; cursor: default; }
+
     @keyframes bounce {
       0%, 60%, 100% { transform: translateY(0); }
       30% { transform: translateY(-5px); }
@@ -270,6 +344,93 @@
   let sessionId = null;
   let polling = null;
 
+  // ── Контактная форма (inline) ────────────────────────────────────
+  function addContactForm() {
+    const msgs = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = 'msg bot';
+    div.id = 'contact-form-msg';
+    div.innerHTML = `
+      <div class="avatar">AI</div>
+      <div class="bubble">Укажите ваши контактные данные:
+        <form class="contact-form" onsubmit="submitContacts(event)">
+          <div class="contact-form-field">
+            <label>Имя</label>
+            <input type="text" id="contact-name" placeholder="Иван Иванов" />
+          </div>
+          <div class="contact-form-field">
+            <label>Email</label>
+            <input type="email" id="contact-email" placeholder="ivan@example.com" />
+            <div class="field-error" id="email-error">Введите корректный email</div>
+          </div>
+          <div class="contact-form-field">
+            <label>Телефон</label>
+            <input type="tel" id="contact-phone" placeholder="+7 900 000 00 00" />
+          </div>
+          <button type="submit" class="contact-form-submit" id="contacts-submit">Получить отчёт</button>
+        </form>
+      </div>`;
+    msgs.appendChild(div);
+    scrollBottom();
+    document.getElementById('contact-name').focus();
+  }
+
+  function validateEmail(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  }
+
+  async function submitContacts(e) {
+    e.preventDefault();
+    const name  = document.getElementById('contact-name').value.trim();
+    const email = document.getElementById('contact-email').value.trim();
+    const phone = document.getElementById('contact-phone').value.trim();
+
+    const emailInput = document.getElementById('contact-email');
+    const emailError = document.getElementById('email-error');
+
+    let valid = true;
+    if (!validateEmail(email)) {
+      emailInput.classList.add('invalid');
+      emailError.classList.add('visible');
+      valid = false;
+    } else {
+      emailInput.classList.remove('invalid');
+      emailError.classList.remove('visible');
+    }
+    if (!name || !phone) valid = false;
+    if (!valid) return;
+
+    const btn = document.getElementById('contacts-submit');
+    btn.disabled = true;
+    btn.textContent = 'Отправляем...';
+
+    try {
+      const res = await fetch(`${API}/api/v1/chat/contacts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, name, email, phone }),
+      });
+      const data = await res.json();
+      document.getElementById('contact-form-msg')?.remove();
+
+      if (data.status === 'generating') {
+        addBotMessage(data.message);
+        showGeneratingBadge();
+        startPolling();
+      } else if (data.status === 'completed') {
+        addBotMessage(data.message, data.report_url);
+      } else {
+        addBotMessage(data.message);
+        setInputEnabled(true);
+      }
+    } catch (e) {
+      addBotMessage('Ошибка при отправке данных. Попробуйте ещё раз.');
+      btn.disabled = false;
+      btn.textContent = 'Получить отчёт';
+      setInputEnabled(true);
+    }
+  }
+
   // ── Инициализация ──────────────────────────────────────────────
   async function startNewChat() {
     clearPolling();
@@ -283,7 +444,9 @@
       const data = await res.json();
       sessionId = data.session_id;
       removeTyping();
-      addBotMessage(data.message);
+      // Показываем только приветствие без нумерованного списка — он заменён кнопками
+      const greeting = data.message.split('\n\n')[0];
+      addBotMessageWithScenarios(greeting, data.scenarios || []);
       setInputEnabled(true);
     } catch (e) {
       removeTyping();
@@ -292,13 +455,23 @@
   }
 
   // ── Отправка сообщения ──────────────────────────────────────────
+  function selectScenario(name) {
+    // Убираем все кнопки и отправляем выбор
+    document.querySelectorAll('.scenario-options').forEach(el => el.remove());
+    sendText(name);
+  }
+
   async function sendMessage() {
     const input = document.getElementById('input');
     const text = input.value.trim();
     if (!text || !sessionId) return;
-
     input.value = '';
     autoResize(input);
+    await sendText(text);
+  }
+
+  async function sendText(text) {
+    if (!text || !sessionId) return;
     setInputEnabled(false);
     addUserMessage(text);
     showTyping();
@@ -312,7 +485,9 @@
       const data = await res.json();
       removeTyping();
 
-      if (data.status === 'generating') {
+      if (data.status === 'collecting_contacts') {
+        addContactForm();
+      } else if (data.status === 'generating') {
         addBotMessage(data.message);
         showGeneratingBadge();
         startPolling();
@@ -367,6 +542,36 @@
     div.innerHTML = `
       <div class="avatar">AI</div>
       <div class="bubble">${escapeHtml(text)}${reportUrl ? `<br><a class="report-btn" href="${reportUrl}" target="_blank" download>📄 Скачать отчёт PDF</a>` : ''}</div>`;
+    msgs.appendChild(div);
+    scrollBottom();
+  }
+
+  function addBotMessageWithScenarios(text, scenarios) {
+    const msgs = document.getElementById('messages');
+
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.textContent = 'AI';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = text;
+
+    const optionsDiv = document.createElement('div');
+    optionsDiv.className = 'scenario-options';
+    scenarios.forEach(s => {
+      const btn = document.createElement('button');
+      btn.className = 'scenario-btn';
+      btn.textContent = s.name;
+      btn.addEventListener('click', () => selectScenario(s.name));
+      optionsDiv.appendChild(btn);
+    });
+    bubble.appendChild(optionsDiv);
+
+    const div = document.createElement('div');
+    div.className = 'msg bot';
+    div.appendChild(avatar);
+    div.appendChild(bubble);
     msgs.appendChild(div);
     scrollBottom();
   }

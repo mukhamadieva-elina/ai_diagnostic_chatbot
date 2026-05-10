@@ -1,0 +1,33 @@
+services:
+  db:
+    image: docker-registry.x5.ru/postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "1"
+      POSTGRES_DB: ai_diagnostic_chatbot
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init_data.sql:/docker-entrypoint-initdb.d/init_data.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_diagnostic_chatbot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      # Переопределяем URL: localhost → имя сервиса db внутри Docker
+      DATABASE_URL: postgresql+asyncpg://postgres:1@db:5432/ai_diagnostic_chatbot
+      REPORTS_DIR: /project/reports
+    volumes:
+      - ./reports:/project/reports
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

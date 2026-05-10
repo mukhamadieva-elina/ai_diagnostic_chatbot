@@ -107,6 +107,36 @@ async def handle_reply(
     return BotReply(message="Неизвестный статус сессии.", status="error")
 
 
+async def submit_contacts(
+    session_id: uuid.UUID,
+    name: str,
+    email: str,
+    phone: str,
+    db: AsyncSession,
+    base_url: str,
+    background_tasks: BackgroundTasks | None = None,
+) -> BotReply:
+    """Принимает все контактные данные разом и запускает генерацию отчёта."""
+    session = await db.get(ChatSession, session_id)
+    if session is None:
+        return BotReply(message="Сессия не найдена.", status="error")
+    if session.status != "pending_contact":
+        return BotReply(message="Неверный статус сессии.", status="error")
+
+    session.contact_name = name.strip()
+    session.contact_email = email.strip()
+    session.contact_phone = phone.strip()
+    session.pending_contact_field = None
+    session.status = "generating"
+    await db.commit()
+
+    generating_message = "Идёт генерация ИИ отчёта, это займёт около минуты..."
+    if background_tasks is not None:
+        background_tasks.add_task(_run_generation_bg, session.id, base_url)
+        return BotReply(message=generating_message, status="generating")
+    return await _generate_and_finalize(session, db, base_url)
+
+
 async def get_session_state(
     session_id: uuid.UUID,
     db: AsyncSession,
