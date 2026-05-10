@@ -1,6 +1,6 @@
 services:
   db:
-    image: docker-registry.x5.ru/postgres:17
+    image: postgres:17
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: "1"
