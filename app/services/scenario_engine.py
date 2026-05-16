@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 from db.connection import async_session_factory
 from models.db import ChatSession, DialogEntry, GlobalSettings, Scenario, ScenarioStep, Report, ValidationSettings
 from services import llm, pdf_generator, bitrix
+from services.metrics import SESSIONS_STARTED, CONTACTS_SUBMITTED, REPORTS_GENERATED, REPORTS_FAILED
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ async def start_session(db: AsyncSession) -> tuple[uuid.UUID, str, list[dict]]:
         user_answer=None,
     ))
     await db.commit()
+    SESSIONS_STARTED.inc()
     return session.id, full_greeting, scenarios_list
 
 
@@ -115,6 +117,7 @@ async def submit_contacts(
     db: AsyncSession,
     base_url: str,
     background_tasks: BackgroundTasks | None = None,
+    client_timezone: str | None = None,
 ) -> BotReply:
     """Принимает все контактные данные разом и запускает генерацию отчёта."""
     session = await db.get(ChatSession, session_id)
@@ -129,12 +132,13 @@ async def submit_contacts(
     session.pending_contact_field = None
     session.status = "generating"
     await db.commit()
+    CONTACTS_SUBMITTED.inc()
 
     generating_message = "Идёт генерация ИИ отчёта, это займёт около минуты..."
     if background_tasks is not None:
-        background_tasks.add_task(_run_generation_bg, session.id, base_url)
+        background_tasks.add_task(_run_generation_bg, session.id, base_url, client_timezone)
         return BotReply(message=generating_message, status="generating")
-    return await _generate_and_finalize(session, db, base_url)
+    return await _generate_and_finalize(session, db, base_url, client_timezone)
 
 
 async def get_session_state(
@@ -331,6 +335,7 @@ async def _generate_and_finalize(
     session: ChatSession,
     db: AsyncSession,
     base_url: str,
+    client_timezone: str | None = None,
 ) -> BotReply:
     session.status = "generating"
     await db.commit()
@@ -376,6 +381,7 @@ async def _generate_and_finalize(
             contact_phone=session.contact_phone or "",
             llm_response=llm_response,
             next_step_text=next_step_text,
+            client_timezone=client_timezone,
         )
 
         # Сохраняем отчёт в БД
@@ -407,6 +413,7 @@ async def _generate_and_finalize(
             logger.warning("Bitrix24 push failed: %s", e)
 
         report_url = f"{base_url}/api/v1/report/{session.id}"
+        REPORTS_GENERATED.inc()
         return BotReply(
             message=(
                 "Отчёт готов! Вы можете скачать его по ссылке ниже. "
@@ -420,6 +427,7 @@ async def _generate_and_finalize(
         logger.error("Ошибка генерации отчёта для сессии %s: %s", session.id, e)
         session.status = "in_progress"  # откатываем статус чтобы повторить
         await db.commit()
+        REPORTS_FAILED.inc()
         return BotReply(
             message="Произошла ошибка при генерации отчёта. Попробуйте ещё раз.",
             status="error",
@@ -447,11 +455,11 @@ def _get_current_question(session: ChatSession) -> str | None:
     return None
 
 
-async def _run_generation_bg(session_id: uuid.UUID, base_url: str) -> None:
+async def _run_generation_bg(session_id: uuid.UUID, base_url: str, client_timezone: str | None = None) -> None:
     """Фоновая задача: генерирует отчёт в отдельной DB-сессии после отправки ответа клиенту."""
     async with async_session_factory() as db:
         session = await db.get(ChatSession, session_id)
         if session is None:
             logger.error("Фоновая генерация: сессия %s не найдена", session_id)
             return
-        await _generate_and_finalize(session, db, base_url)
+        await _generate_and_finalize(session, db, base_url, client_timezone)

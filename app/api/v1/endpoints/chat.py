@@ -59,6 +59,7 @@ async def submit_contacts(
         db=db,
         base_url=_base_url(request),
         background_tasks=background_tasks,
+        client_timezone=body.timezone,
     )
     return ReplyResponse(
         message=result.message,

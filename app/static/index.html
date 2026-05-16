@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>AI Booster — Диагностика бизнеса</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -14,12 +14,14 @@
       justify-content: center;
       align-items: center;
       min-height: 100vh;
+      min-height: 100dvh;
     }
 
     .chat-wrapper {
       width: 100%;
       max-width: 680px;
       height: 100vh;
+      height: 100dvh;
       max-height: 800px;
       display: flex;
       flex-direction: column;
@@ -29,11 +31,25 @@
       overflow: hidden;
     }
 
+    @media (max-width: 600px) {
+      body {
+        background: #fff;
+        align-items: stretch;
+      }
+      .chat-wrapper {
+        max-width: 100%;
+        max-height: none;
+        border-radius: 0;
+        box-shadow: none;
+      }
+    }
+
     /* Header */
     .chat-header {
       background: #1A3C6E;
       color: #fff;
       padding: 18px 24px;
+      padding-top: max(18px, env(safe-area-inset-top));
       display: flex;
       align-items: center;
       gap: 12px;
@@ -168,6 +184,7 @@
     /* Input area */
     .input-area {
       padding: 14px 16px;
+      padding-bottom: max(14px, env(safe-area-inset-bottom));
       border-top: 1px solid #eee;
       display: flex;
       gap: 10px;
@@ -258,6 +275,26 @@
       display: none;
     }
     .contact-form .field-error.visible { display: block; }
+    .consent-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-top: 2px;
+    }
+    .consent-row input[type="checkbox"] {
+      margin-top: 2px;
+      flex-shrink: 0;
+      width: 15px;
+      height: 15px;
+      cursor: pointer;
+      accent-color: #1A3C6E;
+    }
+    .consent-row label {
+      font-size: 11px;
+      color: #777;
+      line-height: 1.4;
+      cursor: pointer;
+    }
     .contact-form-submit {
       padding: 9px;
       background: #1A3C6E;
@@ -306,6 +343,30 @@
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(6px); }
       to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (max-width: 600px) {
+      .chat-header { padding: 14px 16px; padding-top: max(14px, env(safe-area-inset-top)); }
+      .chat-header h1 { font-size: 15px; }
+      .chat-header p  { font-size: 11px; }
+      .chat-header .logo { width: 32px; height: 32px; font-size: 14px; }
+
+      .messages { padding: 14px 12px; gap: 10px; }
+
+      .msg { max-width: 92%; }
+      .bubble { font-size: 15px; padding: 9px 13px; }
+
+      .input-area { padding: 10px 12px; padding-bottom: max(10px, env(safe-area-inset-bottom)); gap: 8px; }
+      textarea { font-size: 16px; /* предотвращает zoom на iOS */ padding: 9px 12px; }
+
+      button#send-btn { width: 44px; height: 44px; }
+
+      .scenario-btn { font-size: 15px; padding: 11px 14px; }
+
+      .contact-form-field input { font-size: 16px; /* предотвращает zoom на iOS */ padding: 10px 12px; }
+      .contact-form-submit { padding: 12px; font-size: 15px; }
+
+      .new-chat-btn { padding: 6px 10px; font-size: 11px; }
     }
   </style>
 </head>
@@ -367,12 +428,24 @@
             <label>Телефон</label>
             <input type="tel" id="contact-phone" placeholder="+7 900 000 00 00" />
           </div>
-          <button type="submit" class="contact-form-submit" id="contacts-submit">Получить отчёт</button>
+          <div class="consent-row">
+            <input type="checkbox" id="consent-checkbox" onchange="toggleSubmitBtn()" />
+            <label for="consent-checkbox">
+              Отправляя форму, я даю согласие на обработку персональных данных
+            </label>
+          </div>
+          <button type="submit" class="contact-form-submit" id="contacts-submit" disabled>Получить отчёт</button>
         </form>
       </div>`;
     msgs.appendChild(div);
     scrollBottom();
     document.getElementById('contact-name').focus();
+  }
+
+  function toggleSubmitBtn() {
+    const checked = document.getElementById('consent-checkbox')?.checked;
+    const btn = document.getElementById('contacts-submit');
+    if (btn) btn.disabled = !checked;
   }
 
   function validateEmail(email) {
@@ -388,6 +461,8 @@
     const emailInput = document.getElementById('contact-email');
     const emailError = document.getElementById('email-error');
 
+    const consent = document.getElementById('consent-checkbox').checked;
+
     let valid = true;
     if (!validateEmail(email)) {
       emailInput.classList.add('invalid');
@@ -398,6 +473,7 @@
       emailError.classList.remove('visible');
     }
     if (!name || !phone) valid = false;
+    if (!consent) valid = false;
     if (!valid) return;
 
     const btn = document.getElementById('contacts-submit');
@@ -408,7 +484,7 @@
       const res = await fetch(`${API}/api/v1/chat/contacts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, name, email, phone }),
+        body: JSON.stringify({ session_id: sessionId, name, email, phone, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
       });
       const data = await res.json();
       document.getElementById('contact-form-msg')?.remove();

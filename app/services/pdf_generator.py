@@ -4,6 +4,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import matplotlib
 matplotlib.use("Agg")
@@ -148,10 +149,12 @@ def _parse_sections_generic(text: str) -> list[tuple[str, str]]:
     current_lines: list[str] = []
 
     for line in text.split("\n"):
-        if line.startswith("# "):
+        # Принимаем # и ## с пробелом или без
+        m = re.match(r'^#{1,2}\s*(.*)', line)
+        if m:
             if current_title is not None:
                 sections.append((current_title, "\n".join(current_lines).strip()))
-            current_title = line[2:].strip()
+            current_title = m.group(1).strip()
             current_lines = []
         else:
             if current_title is not None:
@@ -174,7 +177,7 @@ def _has_maturity_scores(text: str) -> bool:
 def _is_maturity_section(title: str) -> bool:
     """True if the section title refers to a maturity/level section."""
     upper = title.upper()
-    return any(kw in upper for kw in ("ЗРЕЛОСТ", "УРОВЕНЬ"))
+    return "ЗРЕЛОСТ" in upper or ("УРОВЕНЬ" in upper and "ЦИФРОВ" in upper)
 
 
 def _section_to_flowables(text: str, styles: dict) -> list:
@@ -248,9 +251,12 @@ def _parse_maturity_scores(llm_text: str) -> dict[str, float]:
     dims = ["Процессы", "Данные", "Технологии", "Персонал"]
     result = {d: 0.0 for d in dims}
 
-    # 1. Inline format: "Процессы: 3/5" or "**Процессы: 3/5**"
+    # 1. Inline: "Процессы: 3/5", "Процессы — 3/5", "Процессы (3/5)", "Процессы: 3 из 5"
     for dim in dims:
-        m = re.search(rf"{dim}[*:\s]+(\d[\.,]?\d?)\s*/\s*5", llm_text, re.IGNORECASE)
+        m = re.search(
+            rf"{dim}[^0-9\n]{{0,10}}(\d[\.,]?\d?)\s*(?:/\s*5|из\s*5)",
+            llm_text, re.IGNORECASE,
+        )
         if m:
             result[dim] = float(m.group(1).replace(",", "."))
 
@@ -293,7 +299,7 @@ def _strip_score_lines(text: str) -> str:
     """Убирает N/5 строки в любом формате и строки markdown-таблиц из секции зрелости."""
     # Совпадает с любым форматом: "Процессы: 2/5", "## Процессы: 2/5", "**Процессы: 2/5**"
     score_line = re.compile(
-        r"^(?:[#*\s]*)?(Процессы|Данные|Технологии|Персонал)[*:\s]+\d[\.,]?\d?\s*/\s*5[*\s]*$",
+        r"^(?:[#*\s]*)?(Процессы|Данные|Технологии|Персонал)[^0-9\n]{0,10}\d[\.,]?\d?\s*(?:/\s*5|из\s*5)[*\s]*$",
         re.IGNORECASE,
     )
     table_row = re.compile(r"^\|.+\|$")
@@ -339,29 +345,32 @@ def _make_radar_chart(scores: dict[str, float]) -> io.BytesIO:
 def _make_bar_chart(scores: dict[str, float]) -> io.BytesIO:
     labels = list(scores.keys())
     values = list(scores.values())
+    n = len(labels)
 
-    fig, ax = plt.subplots(figsize=(5, 2.5))
+    fig, ax = plt.subplots(figsize=(5, n * 0.7 + 1.0))
     fig.patch.set_alpha(0)
     ax.patch.set_alpha(0)
     bar_colors = [_ACCENT_HEX if v >= 3 else "#FF7043" for v in values]
-    bars = ax.barh(labels, values, color=bar_colors, height=0.5)
-    ax.set_xlim(0, 5)
+    bars = ax.barh(labels, values, color=bar_colors, height=0.45)
+    ax.set_xlim(0, 5.8)
     ax.set_xlabel("Баллов из 5", fontsize=8)
     ax.axvline(x=3, color="gray", linestyle="--", linewidth=0.8, alpha=0.7)
     for bar, val in zip(bars, values):
-        ax.text(bar.get_width() + 0.1, bar.get_y() + bar.get_height() / 2,
-                f"{val:.1f}", va="center", fontsize=8)
-    ax.set_title("Оценка по направлениям", fontsize=9, fontweight="bold", color="#1D1D1D")
+        ax.text(bar.get_width() + 0.12, bar.get_y() + bar.get_height() / 2,
+                f"{val:.1f}", va="center", ha="left", fontsize=9, fontweight="bold")
+    ax.set_title("Оценка по направлениям", fontsize=9, fontweight="bold", color="#1D1D1D", pad=8)
+    ax.tick_params(axis="y", labelsize=9, pad=4)
+    ax.tick_params(axis="x", labelsize=8)
     ax.invert_yaxis()
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     good = mpatches.Patch(color=_ACCENT_HEX, label="≥ 3 — удовл.")
-    bad = mpatches.Patch(color="#FF7043", label="< 3 — требует внимания")
+    bad = mpatches.Patch(color="#FF7043", label="< 3 — внимание")
     ax.legend(handles=[good, bad], fontsize=7, loc="lower right",
-              bbox_to_anchor=(1.0, -0.28), ncol=2, frameon=False)
+              bbox_to_anchor=(1.0, -0.18), ncol=2, frameon=False)
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=120, bbox_inches="tight", transparent=True)
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", transparent=True)
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -377,6 +386,7 @@ def generate_pdf(
     contact_phone: str,
     llm_response: str,
     next_step_text: str = "",
+    client_timezone: str | None = None,
 ) -> str:
     """Generate a styled PDF report and return its file path."""
     reports_dir = Path(settings.reports_dir)
@@ -424,10 +434,16 @@ def generate_pdf(
     client_lines.append(
         f'<font name="{_FONT_BOLD}">Сценарий:</font> {html.escape(scenario_name)}'
     )
-    client_lines.append(
-        f'<font name="{_FONT_BOLD}">Дата:</font> '
-        f'{datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")}'
-    )
+    try:
+        tz = ZoneInfo(client_timezone) if client_timezone else timezone.utc
+    except ZoneInfoNotFoundError:
+        tz = timezone.utc
+    now_local = datetime.now(tz)
+    if client_timezone:
+        date_str = now_local.strftime("%d.%m.%Y %H:%M")
+    else:
+        date_str = now_local.strftime("%d.%m.%Y")
+    client_lines.append(f'<font name="{_FONT_BOLD}">Дата:</font> {date_str}')
     for line in client_lines:
         story.append(Paragraph(line, styles["body"]))
 
@@ -468,10 +484,9 @@ def generate_pdf(
             if line:
                 story.append(Paragraph(_apply_highlights(line), styles["body"]))
 
-    # ── 7. Следующий шаг (фиксированный текст из настроек) ──────────────────
+    # ── 7. Мотивационный блок (фиксированный текст из настроек) ────────────
     if next_step_text.strip():
         story.append(gap())
-        story.append(section_h1("Следующий шаг"))
         block = _make_ai_booster_block(
             _section_to_flowables(next_step_text, styles),
             usable_width,

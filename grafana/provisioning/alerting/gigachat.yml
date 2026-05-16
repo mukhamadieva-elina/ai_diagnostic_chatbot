@@ -1,0 +1,99 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: GigaChat
+    folder: GigaChat Alerts
+    interval: 1m
+    rules:
+      - uid: gigachat-error-rate
+        title: "GigaChat: высокий процент ошибок"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: "{{ ds_uid }}"
+            model:
+              expr: >
+                sum(rate(gigachat_requests_total{status="error"}[5m]))
+                /
+                sum(rate(gigachat_requests_total[5m]))
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params: [0.2]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              refId: C
+              type: threshold
+        noDataState: NoData
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: "Доля ошибок GigaChat превысила 20% за последние 5 минут"
+        labels:
+          severity: critical
+
+      - uid: gigachat-high-latency
+        title: "GigaChat: высокое время отклика (P95 > 30s)"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: "{{ ds_uid }}"
+            model:
+              expr: >
+                histogram_quantile(0.95,
+                  sum by (le) (rate(gigachat_request_duration_seconds_bucket{operation="generate_report"}[5m]))
+                )
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params: [30]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              refId: C
+              type: threshold
+        noDataState: NoData
+        execErrState: Error
+        for: 3m
+        annotations:
+          summary: "P95 время отклика generate_report превышает 30 секунд"
+        labels:
+          severity: warning

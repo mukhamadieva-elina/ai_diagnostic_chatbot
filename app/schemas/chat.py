@@ -26,6 +26,7 @@ class ContactsRequest(BaseModel):
     name: str
     email: str
     phone: str
+    timezone: str | None = None
 
 
 class SessionStateResponse(BaseModel):
