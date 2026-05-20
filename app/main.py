@@ -41,6 +41,10 @@ app.add_middleware(
 app.include_router(api_router)
 
 @app.get("/", include_in_schema=False)
+async def serve_landing():
+    return FileResponse(STATIC_DIR / "landing.html")
+
+@app.get("/chat", include_in_schema=False)
 async def serve_frontend():
     return FileResponse(STATIC_DIR / "index.html")
 
