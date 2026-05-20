@@ -114,11 +114,11 @@ def _build_styles() -> dict:
             fontSize=14,
             textColor=_TEXT_COLOR,
             alignment=0,
-            leftIndent=12,
-            firstLineIndent=-12,
+            leftIndent=15,
+            firstLineIndent=-15,
             spaceBefore=4,
             spaceAfter=2,
-            leading=21,
+            leading=16,
         ),
         "level_badge": ParagraphStyle(
             "LevelBadge",
@@ -169,7 +169,7 @@ def _parse_sections_generic(text: str) -> list[tuple[str, str]]:
 def _has_maturity_scores(text: str) -> bool:
     """True if the text contains maturity scores in any format."""
     dimensions = ["Процессы", "Данные", "Технологии", "Персонал"]
-    has_dim = any(re.search(rf"\b{dim}\b", text, re.IGNORECASE) for dim in dimensions)
+    has_dim = any(dim.lower() in text.lower() for dim in dimensions)
     has_score = bool(re.search(r"\d[\.,]?\d?\s*/\s*5", text))
     return has_dim and has_score
 
@@ -299,7 +299,7 @@ def _strip_score_lines(text: str) -> str:
     """Убирает N/5 строки в любом формате и строки markdown-таблиц из секции зрелости."""
     # Совпадает с любым форматом: "Процессы: 2/5", "## Процессы: 2/5", "**Процессы: 2/5**"
     score_line = re.compile(
-        r"^(?:[#*\s]*)?(Процессы|Данные|Технологии|Персонал)[^0-9\n]{0,10}\d[\.,]?\d?\s*(?:/\s*5|из\s*5)[*\s]*$",
+        r'^["«»\s]*(?:[#*\s]*)?(Процессы|Данные|Технологии|Персонал)[^0-9\n]{0,10}\d[\.,]?\d?\s*(?:/\s*5|из\s*5)[*\s"«»]*$',
         re.IGNORECASE,
     )
     table_row = re.compile(r"^\|.+\|$")
