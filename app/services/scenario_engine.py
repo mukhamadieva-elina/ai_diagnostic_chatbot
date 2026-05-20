@@ -4,6 +4,7 @@
 """
 import asyncio
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 
@@ -19,11 +20,7 @@ from services.metrics import SESSIONS_STARTED, CONTACTS_SUBMITTED, REPORTS_GENER
 
 logger = logging.getLogger(__name__)
 
-GREETING = (
-    "Здравствуйте! Я AI-диагност от AI Booster. "
-    "Я помогу вам структурировать ключевую бизнес-проблему и предложу первые шаги для её решения. "
-    "Выберите проблему из ниже перечисленного списка:"
-)
+_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
 _CONTACT_PROMPTS = {
     "name": "Пожалуйста, укажите ваше имя:",
@@ -53,8 +50,12 @@ async def start_session(db: AsyncSession) -> tuple[uuid.UUID, str, list[dict]]:
     scenarios = scenarios_result.scalars().all()
     scenarios_list = [{"id": s.id, "name": s.name} for s in scenarios]
 
+    global_settings: GlobalSettings | None = await db.get(GlobalSettings, 1)
+    greeting_text = global_settings.welcome_message if global_settings else (
+        "Здравствуйте! Выберите проблему из ниже перечисленного списка:"
+    )
     options_text = "\n".join(f"{i + 1}. {s.name}" for i, s in enumerate(scenarios))
-    full_greeting = f"{GREETING}\n\n{options_text}"
+    full_greeting = f"{greeting_text}\n\n{options_text}"
 
     db.add(DialogEntry(
         session_id=session.id,
@@ -125,6 +126,9 @@ async def submit_contacts(
         return BotReply(message="Сессия не найдена.", status="error")
     if session.status != "pending_contact":
         return BotReply(message="Неверный статус сессии.", status="error")
+
+    if not _EMAIL_RE.match(email.strip()):
+        return BotReply(message="Некорректный формат email. Укажите адрес вида name@example.com.", status="error")
 
     session.contact_name = name.strip()
     session.contact_email = email.strip()
@@ -301,6 +305,16 @@ async def _handle_contact_collection(
         session.pending_contact_field = "email"
         prompt = _CONTACT_PROMPTS["email"]
     elif field == "email":
+        if not _EMAIL_RE.match(user_message.strip()):
+            prompt = "Пожалуйста, введите корректный email (например: name@example.com):"
+            db.add(DialogEntry(
+                session_id=session.id,
+                step_index=None,
+                bot_message=prompt,
+                user_answer=None,
+            ))
+            await db.commit()
+            return BotReply(message=prompt, status="collecting_contacts")
         session.contact_email = user_message.strip()
         session.pending_contact_field = "phone"
         prompt = _CONTACT_PROMPTS["phone"]
@@ -413,12 +427,12 @@ async def _generate_and_finalize(
             logger.warning("Bitrix24 push failed: %s", e)
 
         report_url = f"{base_url}/api/v1/report/{session.id}"
+        report_ready_msg = global_settings.report_ready_message if global_settings else (
+            "Отчёт готов! Вы можете скачать его по ссылке ниже. Спасибо за прохождение диагностики!"
+        )
         REPORTS_GENERATED.inc()
         return BotReply(
-            message=(
-                "Отчёт готов! Вы можете скачать его по ссылке ниже. "
-                "Спасибо за прохождение диагностики!"
-            ),
+            message=report_ready_msg,
             status="completed",
             report_url=report_url,
         )

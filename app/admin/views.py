@@ -16,10 +16,28 @@ class GlobalSettingsAdmin(ModelView, model=GlobalSettings):
     column_labels = {
         GlobalSettings.default_system_prompt: "Дефолтный промт (для всех сценариев)",
         GlobalSettings.next_step_text: "Текст блока «Следующий шаг» в PDF",
+        GlobalSettings.welcome_message: "Приветственное сообщение",
+        GlobalSettings.report_ready_message: "Сообщение о готовности отчёта",
     }
 
-    form_columns = ["default_system_prompt", "next_step_text"]
+    form_columns = ["welcome_message", "report_ready_message", "default_system_prompt", "next_step_text"]
     form_args = {
+        "welcome_message": {
+            "label": "Приветственное сообщение",
+            "description": (
+                "Текст, который бот отправляет пользователю в самом начале диалога — "
+                "перед списком сценариев. Список сценариев добавляется автоматически."
+            ),
+            "render_kw": {"rows": 5},
+        },
+        "report_ready_message": {
+            "label": "Сообщение о готовности отчёта",
+            "description": (
+                "Текст, который бот отправляет пользователю после успешной генерации отчёта. "
+                "Ссылка на скачивание PDF добавляется автоматически."
+            ),
+            "render_kw": {"rows": 4},
+        },
         "default_system_prompt": {
             "label": "Универсальный промт GigaChat (для всех сценариев)",
             "description": (

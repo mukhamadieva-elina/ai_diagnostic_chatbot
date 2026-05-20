@@ -1,6 +1,6 @@
 import uuid
 
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 
 
 class StartResponse(BaseModel):
@@ -24,7 +24,7 @@ class ReplyResponse(BaseModel):
 class ContactsRequest(BaseModel):
     session_id: uuid.UUID
     name: str
-    email: str
+    email: EmailStr
     phone: str
     timezone: str | None = None
 

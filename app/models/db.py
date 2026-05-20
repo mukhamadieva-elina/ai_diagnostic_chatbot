@@ -153,6 +153,17 @@ _DEFAULT_NEXT_STEP_TEXT = (
     "Узнайте подробнее и запишитесь на сайте: ai-booster.ru"
 )
 
+_DEFAULT_WELCOME_MESSAGE = (
+    "Здравствуйте! Я AI-диагност от AI Booster. "
+    "Я помогу вам структурировать ключевую бизнес-проблему и предложу первые шаги для её решения. "
+    "Выберите проблему из ниже перечисленного списка:"
+)
+
+_DEFAULT_REPORT_READY_MESSAGE = (
+    "Отчёт готов! Вы можете скачать его по ссылке ниже. "
+    "Спасибо за прохождение диагностики!"
+)
+
 _DEFAULT_GLOBAL_SYSTEM_PROMPT = """Ты — эксперт по цифровой трансформации от компании AI Booster.
 Проведи диагностику компании на основе диалога и сформируй структурированный отчёт.
 
@@ -188,6 +199,8 @@ class GlobalSettings(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     default_system_prompt: Mapped[str] = mapped_column(Text, nullable=False, default=_DEFAULT_GLOBAL_SYSTEM_PROMPT)
     next_step_text: Mapped[str] = mapped_column(Text, nullable=False, default=_DEFAULT_NEXT_STEP_TEXT)
+    welcome_message: Mapped[str] = mapped_column(Text, nullable=False, default=_DEFAULT_WELCOME_MESSAGE)
+    report_ready_message: Mapped[str] = mapped_column(Text, nullable=False, default=_DEFAULT_REPORT_READY_MESSAGE)
 
     def __str__(self) -> str:
         return "Глобальные настройки"

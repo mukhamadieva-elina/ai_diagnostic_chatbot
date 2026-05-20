@@ -426,7 +426,8 @@
           </div>
           <div class="contact-form-field">
             <label>Телефон</label>
-            <input type="tel" id="contact-phone" placeholder="+7 900 000 00 00" />
+            <input type="tel" id="contact-phone" placeholder="+7 (900) 000-00-00" />
+            <div class="field-error" id="phone-error">Введите номер полностью</div>
           </div>
           <div class="consent-row">
             <input type="checkbox" id="consent-checkbox" onchange="toggleSubmitBtn()" />
@@ -440,6 +441,8 @@
     msgs.appendChild(div);
     scrollBottom();
     document.getElementById('contact-name').focus();
+    applyPhoneMask(document.getElementById('contact-phone'), document.getElementById('phone-error'));
+    applyEmailMask(document.getElementById('contact-email'), document.getElementById('email-error'));
   }
 
   function toggleSubmitBtn() {
@@ -452,6 +455,71 @@
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   }
 
+  function validatePhone(phone) {
+    return phone.replace(/\D/g, '').length === 11;
+  }
+
+  function applyPhoneMask(input, errorEl) {
+    function format(raw) {
+      let digits = raw.replace(/\D/g, '');
+      if (digits.startsWith('8') || digits.startsWith('7')) digits = digits.slice(1);
+      digits = digits.slice(0, 10);
+      let r = '+7';
+      if (digits.length > 0) r += ' (' + digits.slice(0, 3);
+      if (digits.length >= 3) r += ') ' + digits.slice(3, 6);
+      if (digits.length >= 6) r += '-' + digits.slice(6, 8);
+      if (digits.length >= 8) r += '-' + digits.slice(8, 10);
+      return r;
+    }
+    input.addEventListener('focus', function () {
+      if (!this.value) this.value = '+7 (';
+    });
+    input.addEventListener('blur', function () {
+      if (this.value === '+7 (' || this.value === '+7') this.value = '';
+      if (this.value && !validatePhone(this.value)) {
+        this.classList.add('invalid');
+        errorEl.classList.add('visible');
+      }
+    });
+    input.addEventListener('input', function () {
+      const pos = this.selectionStart;
+      const before = this.value.slice(0, pos).replace(/\D/g, '').length;
+      this.value = format(this.value);
+      // восстанавливаем позицию курсора
+      let count = 0, newPos = this.value.length;
+      for (let i = 0; i < this.value.length; i++) {
+        if (/\d/.test(this.value[i])) count++;
+        if (count === before) { newPos = i + 1; break; }
+      }
+      this.setSelectionRange(newPos, newPos);
+      if (validatePhone(this.value)) {
+        this.classList.remove('invalid');
+        errorEl.classList.remove('visible');
+      }
+    });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Backspace' && (this.value === '+7 (' || this.value === '+7')) {
+        e.preventDefault();
+        this.value = '';
+      }
+    });
+  }
+
+  function applyEmailMask(input, errorEl) {
+    input.addEventListener('blur', function () {
+      if (this.value.trim() && !validateEmail(this.value)) {
+        this.classList.add('invalid');
+        errorEl.classList.add('visible');
+      }
+    });
+    input.addEventListener('input', function () {
+      if (validateEmail(this.value)) {
+        this.classList.remove('invalid');
+        errorEl.classList.remove('visible');
+      }
+    });
+  }
+
   async function submitContacts(e) {
     e.preventDefault();
     const name  = document.getElementById('contact-name').value.trim();
@@ -460,6 +528,8 @@
 
     const emailInput = document.getElementById('contact-email');
     const emailError = document.getElementById('email-error');
+    const phoneInput = document.getElementById('contact-phone');
+    const phoneError = document.getElementById('phone-error');
 
     const consent = document.getElementById('consent-checkbox').checked;
 
@@ -472,7 +542,15 @@
       emailInput.classList.remove('invalid');
       emailError.classList.remove('visible');
     }
-    if (!name || !phone) valid = false;
+    if (!validatePhone(phone)) {
+      phoneInput.classList.add('invalid');
+      phoneError.classList.add('visible');
+      valid = false;
+    } else {
+      phoneInput.classList.remove('invalid');
+      phoneError.classList.remove('visible');
+    }
+    if (!name) valid = false;
     if (!consent) valid = false;
     if (!valid) return;
 

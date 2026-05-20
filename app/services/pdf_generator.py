@@ -83,8 +83,8 @@ def _build_styles() -> dict:
             alignment=0,
             leftIndent=0,
             spaceBefore=0,
-            spaceAfter=24,
-            leading=18,
+            spaceAfter=20,
+            leading=26,
         ),
         "h2": ParagraphStyle(
             "H2",
@@ -94,8 +94,8 @@ def _build_styles() -> dict:
             alignment=0,
             leftIndent=0,
             spaceBefore=12,
-            spaceAfter=0,
-            leading=14,
+            spaceAfter=4,
+            leading=20,
         ),
         "body": ParagraphStyle(
             "Body",
@@ -104,9 +104,9 @@ def _build_styles() -> dict:
             textColor=_TEXT_COLOR,
             alignment=0,
             leftIndent=0,
-            spaceBefore=6,
+            spaceBefore=4,
             spaceAfter=0,
-            leading=14,
+            leading=16,
         ),
         "bullet": ParagraphStyle(
             "Bullet",
@@ -114,11 +114,11 @@ def _build_styles() -> dict:
             fontSize=14,
             textColor=_TEXT_COLOR,
             alignment=0,
-            leftIndent=0.6 * cm,
-            firstLineIndent=-0.6 * cm,
-            spaceBefore=6,
-            spaceAfter=0,
-            leading=14,
+            leftIndent=12,
+            firstLineIndent=-12,
+            spaceBefore=4,
+            spaceAfter=2,
+            leading=21,
         ),
         "level_badge": ParagraphStyle(
             "LevelBadge",
@@ -128,7 +128,7 @@ def _build_styles() -> dict:
             alignment=0,
             spaceBefore=8,
             spaceAfter=8,
-            leading=18,
+            leading=26,
         ),
         "footer": ParagraphStyle(
             "Footer",
@@ -193,10 +193,10 @@ def _section_to_flowables(text: str, styles: dict) -> list:
             elements.append(Paragraph(_apply_highlights(stripped[3:]), styles["h2"]))
         elif re.match(r'^[-*•]\s', stripped):
             content = _apply_highlights(stripped[2:])
-            elements.append(Paragraph(f"• {content}", styles["bullet"]))
+            elements.append(Paragraph(f"– {content}", styles["bullet"]))
         elif re.match(r'^\d+[.)]\s', stripped):
             content = _apply_highlights(re.sub(r'^\d+[.)]\s+', "", stripped))
-            elements.append(Paragraph(f"• {content}", styles["bullet"]))
+            elements.append(Paragraph(f"– {content}", styles["bullet"]))
         else:
             elements.append(Paragraph(_apply_highlights(stripped), styles["body"]))
     return elements
@@ -226,8 +226,8 @@ def _make_ai_booster_block(flowables: list, width: float) -> Table | None:
         ("BACKGROUND",    (0, 0), (-1, -1), _BLOCK_BG),
         ("LEFTPADDING",   (0, 0), (-1, -1), 16),
         ("RIGHTPADDING",  (0, 0), (-1, -1), 16),
-        ("TOPPADDING",    (0, 0), (-1, -1), 2),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ("TOPPADDING",    (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
         ("TOPPADDING",    (0, 0), (0, 0), 10),
         ("BOTTOMPADDING", (0, -1), (-1, -1), 10),
         ("LINEBEFORE",    (0, 0), (0, -1), 3, _ACCENT_COLOR),
