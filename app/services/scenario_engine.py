@@ -425,10 +425,13 @@ async def _generate_and_finalize(
             global_default_prompt=global_prompt,
         )
 
-        # Извлекаем сводку (# СВОДКА) — в PDF не идёт, только в чат
-        summary, llm_response_for_pdf = _extract_summary(llm_response)
+        # Убираем секцию # СВОДКА из основного ответа, если GigaChat её включил
+        _, clean_response = _extract_summary(llm_response)
 
-        # Генерируем PDF в отдельном потоке (matplotlib блокирующий)
+        # Отдельный запрос к GigaChat — два предложения сводки по готовому отчёту
+        summary = await llm.generate_summary(clean_response)
+
+        # Генерируем PDF из основного ответа (сводка в PDF не идёт)
         pdf_path = await asyncio.to_thread(
             pdf_generator.generate_pdf,
             session_id=session.id,
@@ -436,16 +439,17 @@ async def _generate_and_finalize(
             contact_name=session.contact_name or "",
             contact_email=session.contact_email or "",
             contact_phone=session.contact_phone or "",
-            llm_response=llm_response_for_pdf,
+            llm_response=clean_response,
             next_step_text=next_step_text,
             client_timezone=client_timezone,
         )
 
-        # Сохраняем отчёт в БД
+        # Сохраняем: основной отчёт + сводка как секция (для извлечения при поллинге)
+        stored_response = clean_response + f"\n\n# СВОДКА\n{summary}" if summary else clean_response
         report = Report(
             session_id=session.id,
             pdf_path=pdf_path,
-            llm_response=llm_response,
+            llm_response=stored_response,
         )
         db.add(report)
         session.status = "completed"
