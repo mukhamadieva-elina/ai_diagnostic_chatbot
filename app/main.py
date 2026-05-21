@@ -42,11 +42,11 @@ app.include_router(api_router)
 
 @app.get("/", include_in_schema=False)
 async def serve_landing():
-    return FileResponse(STATIC_DIR / "landing.html")
+    return FileResponse(STATIC_DIR / "landing.html", headers={"Cache-Control": "no-cache"})
 
 @app.get("/chat", include_in_schema=False)
 async def serve_frontend():
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
