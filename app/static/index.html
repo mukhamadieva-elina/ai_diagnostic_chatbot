@@ -363,6 +363,7 @@
       border-radius: 0;
       box-shadow: none;
     }
+    html.embedded .chat-header { display: none; }
 
     @media (max-width: 600px) {
       .chat-header { padding: 14px 16px; padding-top: max(14px, env(safe-area-inset-top)); }
@@ -392,6 +393,14 @@
 <body>
 <script>if (window.self !== window.top) document.documentElement.classList.add('embedded');</script>
 <div class="chat-wrapper">
+
+  <div class="chat-header">
+    <div class="logo">AI</div>
+    <div>
+      <h1>AI Booster</h1>
+      <p>AI Диагностика бизнеса</p>
+    </div>
+  </div>
 
   <div class="messages" id="messages"></div>
 

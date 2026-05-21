@@ -1,5 +1,6 @@
 import logging
 
+from markupsafe import Markup
 from sqladmin import ModelView
 
 from models.db import GlobalSettings, Scenario, ScenarioStep, ChatSession, Report, ValidationSettings
@@ -207,8 +208,14 @@ class ReportAdmin(ModelView, model=Report):
 
     column_list = [
         Report.id, Report.session_id, Report.created_at,
-        Report.sent_to_bitrix, Report.bitrix_deal_id,
+        Report.sent_to_bitrix, Report.bitrix_deal_id, "download",
     ]
+    column_labels = {"download": "Скачать"}
+    column_formatters = {
+        "download": lambda m, a: Markup(
+            f'<a href="/api/v1/report/{m.session_id}" target="_blank">📄 PDF</a>'
+        )
+    }
     column_sortable_list = [Report.created_at, Report.sent_to_bitrix]
     can_create = False
     can_edit = False
