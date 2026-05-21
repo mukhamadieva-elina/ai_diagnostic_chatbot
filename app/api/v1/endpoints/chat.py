@@ -40,6 +40,7 @@ async def reply(
         message=result.message,
         status=result.status,
         report_url=result.report_url,
+        summary=result.summary,
     )
 
 
@@ -65,6 +66,7 @@ async def submit_contacts(
         message=result.message,
         status=result.status,
         report_url=result.report_url,
+        summary=result.summary,
     )
 
 

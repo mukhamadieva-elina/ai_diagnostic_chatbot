@@ -21,6 +21,27 @@ from services.metrics import SESSIONS_STARTED, CONTACTS_SUBMITTED, REPORTS_GENER
 logger = logging.getLogger(__name__)
 
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+_SUMMARY_RE = re.compile(r'^#{1,2}\s*СВОДКА\s*$', re.MULTILINE | re.IGNORECASE)
+
+
+def _extract_summary(llm_response: str) -> tuple[str | None, str]:
+    """Вырезает секцию # СВОДКА из ответа LLM.
+    Возвращает (текст_сводки, ответ_без_сводки)."""
+    match = _SUMMARY_RE.search(llm_response)
+    if not match:
+        return None, llm_response
+
+    # Находим следующий заголовок # после СВОДКИ — там заканчивается секция
+    rest_start = match.end()
+    next_heading = re.search(r'^#{1,2}\s', llm_response[rest_start:], re.MULTILINE)
+    if next_heading:
+        summary_body = llm_response[rest_start:rest_start + next_heading.start()].strip()
+        clean = llm_response[:match.start()].rstrip() + "\n" + llm_response[rest_start + next_heading.start():]
+    else:
+        summary_body = llm_response[rest_start:].strip()
+        clean = llm_response[:match.start()].rstrip()
+
+    return summary_body or None, clean.strip()
 
 _CONTACT_PROMPTS = {
     "name": "Пожалуйста, укажите ваше имя:",
@@ -35,6 +56,7 @@ class BotReply:
     message: str
     status: str           # question | collecting_contacts | generating | completed
     report_url: str | None = None
+    summary: str | None = None
 
 
 async def start_session(db: AsyncSession) -> tuple[uuid.UUID, str, list[dict]]:
@@ -86,8 +108,14 @@ async def handle_reply(
 
     if session.status == "completed":
         report_url = f"{base_url}/api/v1/report/{session_id}" if session.report else None
+        global_settings: GlobalSettings | None = await db.get(GlobalSettings, 1)
+        ready_msg = (
+            global_settings.report_ready_message
+            if global_settings
+            else "Отчёт готов! Вы можете скачать его по ссылке ниже. Спасибо за прохождение диагностики!"
+        )
         return BotReply(
-            message="Ваш отчёт уже готов.",
+            message=ready_msg,
             status="completed",
             report_url=report_url,
         )
@@ -159,14 +187,26 @@ async def get_session_state(
         return None
 
     report_url = None
+    message = None
+    summary = None
     if session.status == "completed" and session.report:
         report_url = f"{base_url}/api/v1/report/{session_id}"
+        global_settings: GlobalSettings | None = await db.get(GlobalSettings, 1)
+        message = (
+            global_settings.report_ready_message
+            if global_settings
+            else "Отчёт готов! Вы можете скачать его по ссылке ниже. Спасибо за прохождение диагностики!"
+        )
+        if session.report.llm_response:
+            summary, _ = _extract_summary(session.report.llm_response)
 
     return {
         "session_id": session.id,
         "status": session.status,
         "scenario_name": session.scenario.name if session.scenario else None,
         "report_url": report_url,
+        "message": message,
+        "summary": summary,
     }
 
 
@@ -385,6 +425,9 @@ async def _generate_and_finalize(
             global_default_prompt=global_prompt,
         )
 
+        # Извлекаем сводку (# СВОДКА) — в PDF не идёт, только в чат
+        summary, llm_response_for_pdf = _extract_summary(llm_response)
+
         # Генерируем PDF в отдельном потоке (matplotlib блокирующий)
         pdf_path = await asyncio.to_thread(
             pdf_generator.generate_pdf,
@@ -393,7 +436,7 @@ async def _generate_and_finalize(
             contact_name=session.contact_name or "",
             contact_email=session.contact_email or "",
             contact_phone=session.contact_phone or "",
-            llm_response=llm_response,
+            llm_response=llm_response_for_pdf,
             next_step_text=next_step_text,
             client_timezone=client_timezone,
         )
@@ -427,14 +470,17 @@ async def _generate_and_finalize(
             logger.warning("Bitrix24 push failed: %s", e)
 
         report_url = f"{base_url}/api/v1/report/{session.id}"
-        report_ready_msg = global_settings.report_ready_message if global_settings else (
-            "Отчёт готов! Вы можете скачать его по ссылке ниже. Спасибо за прохождение диагностики!"
+        fallback_msg = (
+            global_settings.report_ready_message
+            if global_settings
+            else "Отчёт готов! Вы можете скачать его по ссылке ниже. Спасибо за прохождение диагностики!"
         )
         REPORTS_GENERATED.inc()
         return BotReply(
-            message=report_ready_msg,
+            message=fallback_msg,
             status="completed",
             report_url=report_url,
+            summary=summary,
         )
 
     except Exception as e:

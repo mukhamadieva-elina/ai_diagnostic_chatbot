@@ -593,7 +593,7 @@
         showGeneratingBadge();
         startPolling();
       } else if (data.status === 'completed') {
-        addBotMessage(data.message, data.report_url);
+        showCompletedMessages(data);
       } else {
         addBotMessage(data.message);
         setInputEnabled(true);
@@ -667,7 +667,7 @@
         showGeneratingBadge();
         startPolling();
       } else if (data.status === 'completed') {
-        addBotMessage(data.message, data.report_url);
+        showCompletedMessages(data);
       } else if (data.status === 'error') {
         addBotMessage(data.message);
         setInputEnabled(true);
@@ -692,10 +692,7 @@
         if (data.status === 'completed') {
           clearPolling();
           removeGeneratingBadge();
-          addBotMessage(
-            'Отчёт готов! Вы можете скачать его по ссылке ниже. Спасибо за прохождение диагностики!',
-            data.report_url,
-          );
+          showCompletedMessages(data);
         } else if (data.status === 'error') {
           clearPolling();
           removeGeneratingBadge();
@@ -710,6 +707,14 @@
   }
 
   // ── UI-хелперы ──────────────────────────────────────────────────
+  function showCompletedMessages(data) {
+    if (data.summary) {
+      addBotMessage(data.summary);
+    }
+    const readyText = data.message || 'Отчёт готов! Вы можете скачать его по ссылке ниже. Спасибо за прохождение диагностики!';
+    addBotMessage(readyText, data.report_url);
+  }
+
   function addBotMessage(text, reportUrl) {
     const msgs = document.getElementById('messages');
     const div = document.createElement('div');

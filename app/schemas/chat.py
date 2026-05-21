@@ -19,6 +19,7 @@ class ReplyResponse(BaseModel):
     # question | collecting_contacts | generating | completed
     status: str
     report_url: str | None = None
+    summary: str | None = None
 
 
 class ContactsRequest(BaseModel):
@@ -34,3 +35,5 @@ class SessionStateResponse(BaseModel):
     status: str
     scenario_name: str | None
     report_url: str | None = None
+    message: str | None = None
+    summary: str | None = None
