@@ -33,14 +33,18 @@ async def _get_token() -> str:
         "RqUID": str(uuid.uuid4()),
         "Authorization": f"Basic {settings.gigachat_auth_token}",
     }
-    response = await _http_client.post(
-        _GIGACHAT_TOKEN_URL,
-        headers=headers,
-        data={"scope": "GIGACHAT_API_PERS"},
-        follow_redirects=True,
-    )
-    response.raise_for_status()
-    data = response.json()
+    try:
+        response = await _http_client.post(
+            _GIGACHAT_TOKEN_URL,
+            headers=headers,
+            data={"scope": "GIGACHAT_API_PERS"},
+            follow_redirects=True,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        logger.error("GigaChat: не удалось получить токен: %s", e)
+        raise
 
     _cached_token = data["access_token"]
     _token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=28)

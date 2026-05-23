@@ -126,6 +126,17 @@ async def handle_reply(
             status="generating",
         )
 
+    if session.status == "generation_failed":
+        session.status = "generating"
+        await db.commit()
+        if background_tasks is not None:
+            background_tasks.add_task(_run_generation_bg, session.id, base_url)
+            return BotReply(
+                message="Повторяем попытку генерации отчёта, пожалуйста подождите...",
+                status="generating",
+            )
+        return await _generate_and_finalize(session, db, base_url)
+
     if session.status == "pending_scenario":
         return await _handle_scenario_selection(session, user_message, db)
 
@@ -199,6 +210,11 @@ async def get_session_state(
         )
         if session.report.llm_response:
             summary, _ = _extract_summary(session.report.llm_response)
+    elif session.status == "generation_failed":
+        message = (
+            "Сервис ИИ временно недоступен. Попробуйте позже — "
+            "напишите любое сообщение, чтобы повторить попытку."
+        )
 
     return {
         "session_id": session.id,
@@ -489,12 +505,15 @@ async def _generate_and_finalize(
 
     except Exception as e:
         logger.error("Ошибка генерации отчёта для сессии %s: %s", session.id, e)
-        session.status = "in_progress"  # откатываем статус чтобы повторить
+        session.status = "generation_failed"
         await db.commit()
         REPORTS_FAILED.inc()
         return BotReply(
-            message="Произошла ошибка при генерации отчёта. Попробуйте ещё раз.",
-            status="error",
+            message=(
+                "Сервис ИИ временно недоступен. Попробуйте позже — "
+                "напишите любое сообщение, чтобы повторить попытку."
+            ),
+            status="generation_failed",
         )
 
 
